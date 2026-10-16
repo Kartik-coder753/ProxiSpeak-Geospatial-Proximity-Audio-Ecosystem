@@ -1,0 +1,6 @@
+{
+  "name": "ProxiSpeak",
+  "description": "Proximity virtual office platform featuring real-time presence, validated movement, and spatial interaction.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
