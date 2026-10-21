@@ -45,8 +45,11 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
     movementValidator
   );
 
+  proximityService.setPresenceReader(presenceService);
+
   const app = createApp({
     presenceService,
+    proximityService,
     officeRepo,
     userRepo,
     authService,

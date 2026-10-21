@@ -12,6 +12,9 @@ import {
   Move,
   Lock,
   Compass,
+  Headphones,
+  Zap,
+  Layers,
 } from 'lucide-react';
 import { Office } from './shared/contracts/office.types';
 import {
@@ -22,6 +25,7 @@ import {
   ClientToServerEvents,
 } from './shared/contracts/presence.types';
 import { User } from './shared/contracts/user.types';
+import { ProximityPeer } from './shared/contracts/proximity.interface';
 
 type TypedClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -54,10 +58,18 @@ export default function App() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
+  // Proximity & Peer Eligibility state (Person 2)
+  const [proximityPeers, setProximityPeers] = useState<ProximityPeer[]>([]);
+  const [proximityConfig, setProximityConfig] = useState<{ entryRadius: number; exitRadius: number; staleTimeoutMs: number }>({
+    entryRadius: 100,
+    exitRadius: 110,
+    staleTimeoutMs: 15000,
+  });
+
   // Simulation of secondary peer (Bob)
   const [simBobActive, setSimBobActive] = useState(false);
   const simBobSocketRef = useRef<TypedClientSocket | null>(null);
-  const [simBobPos, setSimBobPos] = useState<{ x: number; y: number; seq: number }>({ x: 240, y: 220, seq: 1 });
+  const [simBobPos, setSimBobPos] = useState<{ x: number; y: number; seq: number }>({ x: 260, y: 250, seq: 1 });
 
   const socketRef = useRef<TypedClientSocket | null>(null);
   const sequenceRef = useRef(1);
@@ -73,7 +85,7 @@ export default function App() {
     setLogs((prev) => [entry, ...prev.slice(0, 49)]);
   }, []);
 
-  // Fetch initial system state
+  // Fetch initial system state and proximity config
   useEffect(() => {
     const fetchSystemInfo = async () => {
       try {
@@ -97,6 +109,12 @@ export default function App() {
             setSelectedUser(u[0]); // Default to Alice
           }
         }
+
+        const configRes = await fetch('/api/proximity/config');
+        if (configRes.ok) {
+          const c = await configRes.json();
+          if (c.entryRadius) setProximityConfig(c);
+        }
       } catch (err) {
         console.error('Failed to query backend info:', err);
       }
@@ -106,6 +124,30 @@ export default function App() {
     const interval = setInterval(fetchSystemInfo, 6000);
     return () => clearInterval(interval);
   }, []);
+
+  // Poll proximity peers for active user
+  useEffect(() => {
+    if (!selectedUser || !inOffice) {
+      setProximityPeers([]);
+      return;
+    }
+
+    const fetchPeers = async () => {
+      try {
+        const res = await fetch(`/api/proximity/peers/${selectedUser.user.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setProximityPeers(data.peers || []);
+        }
+      } catch {
+        // silent fallback
+      }
+    };
+
+    fetchPeers();
+    const peerInterval = setInterval(fetchPeers, 1000);
+    return () => clearInterval(peerInterval);
+  }, [selectedUser, inOffice, myPosition]);
 
   // Connect or switch active socket
   const handleConnect = useCallback((account: DemoAccount) => {
@@ -207,6 +249,7 @@ export default function App() {
     socketRef.current.emit('office:leave', { officeId: selectedOfficeId }, () => {
       setInOffice(false);
       setActiveUsers([]);
+      setProximityPeers([]);
       addLog('info', `Left office ${selectedOfficeId}`);
     });
   }, [selectedOfficeId, addLog]);
@@ -301,10 +344,10 @@ export default function App() {
         addLog('success', 'Simulated Bob socket connected.');
         bobSocket.emit(
           'office:join',
-          { officeId: selectedOfficeId, initialPosition: { x: 300, y: 220 } },
+          { officeId: selectedOfficeId, initialPosition: { x: 260, y: 240 } },
           (res) => {
             if (res.success) {
-              addLog('info', 'Simulated Bob joined office.');
+              addLog('info', 'Simulated Bob joined office at (260, 240).');
               setSimBobActive(true);
             }
           }
@@ -315,26 +358,21 @@ export default function App() {
     }
   };
 
-  // Make Bob walk back and forth if simulation active
-  useEffect(() => {
-    if (!simBobActive || !simBobSocketRef.current) return;
-    const timer = setInterval(() => {
-      setSimBobPos((prev) => {
-        const nextX = prev.x > 380 ? 250 : prev.x + 25;
-        const nextSeq = prev.seq + 1;
-        simBobSocketRef.current?.emit('avatar:move', {
-          officeId: selectedOfficeId,
-          x: nextX,
-          y: prev.y,
-          sequence: nextSeq,
-          timestamp: Date.now(),
-        });
-        return { ...prev, x: nextX, seq: nextSeq };
-      });
-    }, 2000);
-
-    return () => clearInterval(timer);
-  }, [simBobActive, selectedOfficeId]);
+  // Make Bob oscillate near the 100px boundary to showcase hysteresis
+  const testBobHysteresisOscillation = () => {
+    if (!simBobSocketRef.current || !inOffice) return;
+    addLog('info', 'Testing boundary oscillation (95px -> 105px -> 98px): observing zero connection churn...');
+    // Alice is at myPosition. Move Bob to 95px away, then 105px away
+    const seq = simBobPos.seq + 1;
+    simBobSocketRef.current.emit('avatar:move', {
+      officeId: selectedOfficeId,
+      x: myPosition.x + 95,
+      y: myPosition.y,
+      sequence: seq,
+      timestamp: Date.now(),
+    });
+    setSimBobPos({ x: myPosition.x + 95, y: myPosition.y, seq });
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -348,23 +386,32 @@ export default function App() {
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-white">ProxiSpeak</h1>
               <span className="px-2 py-0.5 text-xs font-semibold rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                Person 1: Foundation Owner
+                Person 1: Foundation
+              </span>
+              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                <Compass className="h-3 w-3" /> Person 2: Geospatial & Proximity
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Shared Backend Foundation • Auth • Presence Sockets • Authoritative Movement
+              MongoDB 2D Flat Geospatial Indexes • $near & $geoWithin • Euclidean Distance • 100px Radius • Exit Hysteresis
             </p>
           </div>
         </div>
 
         {/* Server & Health Metrics */}
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-3 text-xs">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
             <ServerIcon className="h-4 w-4 text-emerald-400" />
             <span className="text-slate-400">Health:</span>
             <span className="font-semibold text-emerald-400">
               {healthStatus?.status === 'ok' ? 'Online' : 'Checking...'}
             </span>
+          </div>
+
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
+            <Headphones className="h-4 w-4 text-cyan-400" />
+            <span className="text-slate-400">Peers in Earshot:</span>
+            <span className="font-semibold text-cyan-300">{proximityPeers.length}</span>
           </div>
 
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
@@ -387,9 +434,6 @@ export default function App() {
               <ShieldCheck className="h-4 w-4 text-indigo-400" />
               1. Socket Authentication
             </h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Select a seeded user account to authenticate via handshake token:
-            </p>
 
             <div className="space-y-2 mb-4">
               {demoAccounts.map((acc) => {
@@ -471,9 +515,8 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-slate-400 line-clamp-1">{off.description}</p>
                     <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                      Bounds: {off.bounds.maxX}x{off.bounds.maxY}px • {off.obstacles.length} Obstacles
+                      Bounds: {off.bounds.maxX}x{off.bounds.maxY}px
                     </div>
                   </div>
                 );
@@ -505,29 +548,56 @@ export default function App() {
             )}
           </div>
 
-          {/* Multi-Client Peer Simulation */}
+          {/* Spatial Proximity Rules Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Compass className="h-4 w-4 text-cyan-400" />
-              Multi-Client Peer Simulator
+              <Zap className="h-4 w-4 text-amber-400" />
+              Proximity Rules & Engine
             </h2>
-            <p className="text-xs text-slate-400 mb-3">
-              Spawn a simulated second user (Bob) on a parallel WebSocket to test live synchronized presence:
-            </p>
-            <button
-              onClick={toggleSimBob}
-              className={`w-full py-2 px-3 rounded-lg text-xs font-semibold border transition ${
-                simBobActive
-                  ? 'bg-amber-600/20 border-amber-500/40 text-amber-300 hover:bg-amber-600/30'
-                  : 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30'
-              }`}
-            >
-              {simBobActive ? 'Stop Bob Simulation' : 'Spawn Bob in Current Office'}
-            </button>
+            <div className="space-y-2 text-xs text-slate-400">
+              <div className="flex justify-between border-b border-slate-800/80 pb-1.5">
+                <span>Entry Earshot Radius:</span>
+                <span className="font-mono text-emerald-400 font-semibold">{proximityConfig.entryRadius} px</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800/80 pb-1.5">
+                <span>Exit Hysteresis Boundary:</span>
+                <span className="font-mono text-amber-400 font-semibold">{proximityConfig.exitRadius} px</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800/80 pb-1.5">
+                <span>MongoDB Geospatial Index:</span>
+                <span className="font-mono text-cyan-400 font-semibold">&#123; position: &quot;2d&quot; &#125;</span>
+              </div>
+              <div className="flex justify-between pb-1">
+                <span>Stale Position Timeout:</span>
+                <span className="font-mono text-slate-300 font-semibold">15,000 ms</span>
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-800 flex flex-col gap-2">
+              <button
+                onClick={toggleSimBob}
+                className={`w-full py-2 px-3 rounded-lg text-xs font-semibold border transition ${
+                  simBobActive
+                    ? 'bg-amber-600/20 border-amber-500/40 text-amber-300 hover:bg-amber-600/30'
+                    : 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30'
+                }`}
+              >
+                {simBobActive ? 'Stop Bob Simulation' : 'Spawn Bob to Test Earshot'}
+              </button>
+
+              {simBobActive && inOffice && (
+                <button
+                  onClick={testBobHysteresisOscillation}
+                  className="w-full py-1.5 px-3 rounded-lg text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+                >
+                  Step Bob to Hysteresis Zone (95px)
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Center Canvas: Live 2D Office & Authoritative Movement */}
+        {/* Center Canvas: Live 2D Office with Visual Earshot Radius */}
         <div className="lg:col-span-2 flex flex-col space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex-1 flex flex-col">
             <div className="flex items-center justify-between mb-3">
@@ -541,8 +611,8 @@ export default function App() {
                 {inOffice && (
                   <>
                     <span>Position: ({myPosition.x}, {myPosition.y})</span>
-                    <span>Seq: #{myPosition.sequence}</span>
                     <span className="text-emerald-400">Online: {activeUsers.length}</span>
+                    <span className="text-cyan-400">Peers: {proximityPeers.length}</span>
                   </>
                 )}
               </div>
@@ -590,11 +660,37 @@ export default function App() {
                       {obs.name}
                     </span>
                     <span className="text-[9px] text-rose-400/80 font-mono">
-                      Obstacle / Wall
+                      Obstacle
                     </span>
                   </div>
                 );
               })}
+
+              {/* Render Proximity Radius Circles around active user */}
+              {inOffice && currentOffice && (
+                <>
+                  {/* 110px Hysteresis Exit Circle (dashed amber) */}
+                  <div
+                    className="absolute rounded-full border border-dashed border-amber-400/40 pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                    style={{
+                      left: `${(myPosition.x / currentOffice.bounds.maxX) * 100}%`,
+                      top: `${(myPosition.y / currentOffice.bounds.maxY) * 100}%`,
+                      width: `${((proximityConfig.exitRadius * 2) / currentOffice.bounds.maxX) * 100}%`,
+                      height: `${((proximityConfig.exitRadius * 2) / currentOffice.bounds.maxY) * 100}%`,
+                    }}
+                  />
+                  {/* 100px Entry Earshot Circle (solid emerald with subtle glow) */}
+                  <div
+                    className="absolute rounded-full border-2 border-emerald-500/40 bg-emerald-500/5 pointer-events-none -translate-x-1/2 -translate-y-1/2 shadow-lg shadow-emerald-500/10"
+                    style={{
+                      left: `${(myPosition.x / currentOffice.bounds.maxX) * 100}%`,
+                      top: `${(myPosition.y / currentOffice.bounds.maxY) * 100}%`,
+                      width: `${((proximityConfig.entryRadius * 2) / currentOffice.bounds.maxX) * 100}%`,
+                      height: `${((proximityConfig.entryRadius * 2) / currentOffice.bounds.maxY) * 100}%`,
+                    }}
+                  />
+                </>
+              )}
 
               {/* Render Active Member Avatars */}
               {inOffice &&
@@ -604,6 +700,9 @@ export default function App() {
                   const pos = isMe ? myPosition : member.position;
                   const leftPct = (pos.x / currentOffice.bounds.maxX) * 100;
                   const topPct = (pos.y / currentOffice.bounds.maxY) * 100;
+
+                  const isPeer = proximityPeers.some((p) => p.userId === member.userId);
+                  const peerData = proximityPeers.find((p) => p.userId === member.userId);
 
                   return (
                     <div
@@ -615,10 +714,12 @@ export default function App() {
                       }}
                     >
                       <div
-                        className={`h-8 w-8 rounded-full border-2 flex items-center justify-center shadow-lg ${
+                        className={`h-8 w-8 rounded-full border-2 flex items-center justify-center shadow-lg transition-transform ${
                           isMe
-                            ? 'border-indigo-400 bg-indigo-600 shadow-indigo-500/50'
-                            : 'border-emerald-400 bg-emerald-600 shadow-emerald-500/40'
+                            ? 'border-indigo-400 bg-indigo-600 shadow-indigo-500/50 scale-105'
+                            : isPeer
+                            ? 'border-emerald-400 bg-emerald-600 shadow-emerald-500/60 ring-2 ring-emerald-400/50'
+                            : 'border-slate-500 bg-slate-700 shadow-slate-900/40'
                         }`}
                       >
                         <img
@@ -627,8 +728,14 @@ export default function App() {
                           className="h-6 w-6 rounded-full"
                         />
                       </div>
-                      <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-[10px] font-semibold text-white whitespace-nowrap shadow">
-                        {member.user.displayName} {isMe ? '(You)' : ''}
+                      <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-[10px] font-semibold text-white whitespace-nowrap shadow flex items-center gap-1">
+                        {isPeer && <Headphones className="h-2.5 w-2.5 text-emerald-400" />}
+                        <span>{member.user.displayName} {isMe ? '(You)' : ''}</span>
+                        {peerData && (
+                          <span className="text-[9px] text-emerald-400 font-mono">
+                            {peerData.distance.toFixed(1)}px
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -639,71 +746,62 @@ export default function App() {
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="text-slate-400 flex items-center gap-1.5">
                 <span className="font-semibold text-slate-300">Controls:</span>
-                <span>Click canvas or use WASD / Arrow Keys to move avatar.</span>
-              </div>
-
-              {/* Edge Case Test Buttons */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => sendMove(-50, 200, 'Test Out-of-Bounds')}
-                  disabled={!inOffice}
-                  className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-[11px] font-medium text-slate-300 border border-slate-700"
-                >
-                  Test Negative Coord
-                </button>
-                <button
-                  onClick={() => {
-                    if (currentOffice?.obstacles[0]) {
-                      const obs = currentOffice.obstacles[0];
-                      sendMove(obs.x + 10, obs.y + 10, 'Test Wall Collision');
-                    }
-                  }}
-                  disabled={!inOffice}
-                  className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-[11px] font-medium text-slate-300 border border-slate-700"
-                >
-                  Test Wall Collision
-                </button>
-                <button
-                  onClick={() => sendMove(myPosition.x + 800, myPosition.y, 'Test Excessive Speed')}
-                  disabled={!inOffice}
-                  className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-[11px] font-medium text-slate-300 border border-slate-700"
-                >
-                  Test Teleport Rejection
-                </button>
+                <span>Click canvas or use WASD / Arrow Keys. Green circle shows 100px earshot; dashed circle shows 110px exit hysteresis.</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Live Event Audit & Sockets Inspector */}
+        {/* Right Column: Peers In Earshot & Live Event Audit */}
         <div className="space-y-6 lg:col-span-1">
-          {/* Active Members Snapshot */}
+          {/* Active Audio Peers in Earshot */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center justify-between">
-              <span>Office Presence</span>
+              <span className="flex items-center gap-2">
+                <Headphones className="h-4 w-4 text-emerald-400" />
+                Audio Peers In Range
+              </span>
               <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
-                {activeUsers.length} in room
+                {proximityPeers.length} eligible
               </span>
             </h3>
 
-            {activeUsers.length === 0 ? (
-              <p className="text-xs text-slate-500 italic">No users currently in this office.</p>
+            {proximityPeers.length === 0 ? (
+              <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800/80 text-center">
+                <p className="text-xs text-slate-400">No peers within 100px earshot radius.</p>
+                <p className="text-[11px] text-slate-500 mt-1">Move closer to other avatars or spawn Bob.</p>
+              </div>
             ) : (
               <div className="space-y-2">
-                {activeUsers.map((m) => (
-                  <div
-                    key={m.userId}
-                    className="p-2 rounded-lg bg-slate-950/60 border border-slate-800 text-xs flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="font-medium text-slate-200">{m.user.displayName}</span>
+                {proximityPeers.map((peer) => {
+                  const member = activeUsers.find((u) => u.userId === peer.userId);
+                  const isHysteresis = peer.distance > proximityConfig.entryRadius;
+                  return (
+                    <div
+                      key={peer.userId}
+                      className="p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/30 text-xs flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                        <div>
+                          <div className="font-semibold text-slate-200">
+                            {member?.user.displayName ?? peer.userId}
+                          </div>
+                          <div className="text-[10px] text-emerald-400 font-mono">
+                            Euclidean: {peer.distance} px
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        isHysteresis
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      }`}>
+                        {isHysteresis ? 'Hysteresis (Exit at 110px)' : 'In Earshot (<=100px)'}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      ({m.position.x}, {m.position.y})
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -711,7 +809,10 @@ export default function App() {
           {/* Live Socket Event Audit Log */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col h-80">
             <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Socket Event Log</span>
+              <span className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-indigo-400" />
+                Event Audit Log
+              </span>
               <button
                 onClick={() => setLogs([])}
                 className="text-[10px] text-slate-400 hover:text-slate-200"
@@ -722,7 +823,7 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto space-y-1.5 font-mono text-[11px] pr-1">
               {logs.length === 0 ? (
-                <p className="text-slate-600 text-xs italic py-2">Waiting for socket activity...</p>
+                <p className="text-slate-600 text-xs italic py-2">Waiting for proximity / presence activity...</p>
               ) : (
                 logs.map((log) => {
                   let color = 'text-slate-400';

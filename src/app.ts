@@ -1,11 +1,13 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import { PresenceService } from './modules/presence/presence.service';
+import { ProximityService } from './modules/proximity/proximity.service';
 import { IOfficeRepository, IUserRepository } from './shared/contracts/repository.interfaces';
 import { IAuthService } from './shared/contracts/user.types';
 
 export interface AppDependencies {
   presenceService?: PresenceService;
+  proximityService?: ProximityService;
   officeRepo?: IOfficeRepository;
   userRepo?: IUserRepository;
   authService?: IAuthService;
@@ -62,6 +64,26 @@ export function createApp(deps?: AppDependencies): Express {
       presences,
       timestamp: Date.now(),
     });
+  });
+
+  app.get('/api/proximity/peers/:userId', (req: Request, res: Response) => {
+    if (!deps?.proximityService) {
+      return res.status(200).json({ peers: [] });
+    }
+    const peers = deps.proximityService.getPeersForUser(req.params.userId);
+    res.json({
+      userId: req.params.userId,
+      peers,
+      config: deps.proximityService.getConfig(),
+      timestamp: Date.now(),
+    });
+  });
+
+  app.get('/api/proximity/config', (_req: Request, res: Response) => {
+    if (!deps?.proximityService) {
+      return res.status(200).json({});
+    }
+    res.json(deps.proximityService.getConfig());
   });
 
   app.get('/api/auth/demo-users', async (_req: Request, res: Response) => {
