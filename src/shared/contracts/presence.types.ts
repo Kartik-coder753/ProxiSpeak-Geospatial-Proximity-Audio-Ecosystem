@@ -47,12 +47,29 @@ export interface MoveValidationResult {
   sanitizedPosition?: AvatarPosition;
 }
 
+import {
+  InboundAnswerEvent,
+  InboundIceEvent,
+  InboundOfferEvent,
+  PeerEligibleEvent,
+  PeerIneligibleEvent,
+  SignalingRelayResult,
+  WebRTCAnswerPayload,
+  WebRTCIcePayload,
+  WebRTCOfferPayload,
+} from './signaling.interface';
+
 export interface ServerToClientEvents {
   'presence:snapshot': (snapshot: PresenceSnapshot) => void;
   'presence:joined': (data: { officeId: string; member: PresenceUser }) => void;
   'presence:left': (data: { officeId: string; userId: string; reason?: string }) => void;
   'avatar:moved': (data: { officeId: string; userId: string; position: AvatarPosition }) => void;
   'avatar:move_rejected': (data: { officeId: string; reason: string; code: string; currentPosition: AvatarPosition }) => void;
+  'signal:offer': (data: InboundOfferEvent) => void;
+  'signal:answer': (data: InboundAnswerEvent) => void;
+  'signal:ice': (data: InboundIceEvent) => void;
+  'signal:peer_eligible': (data: PeerEligibleEvent) => void;
+  'signal:peer_ineligible': (data: PeerIneligibleEvent) => void;
   'error': (data: { message: string; code?: string }) => void;
 }
 
@@ -68,6 +85,18 @@ export interface ClientToServerEvents {
   'avatar:move': (
     payload: MoveAvatarPayload,
     callback?: (response: { success: boolean; error?: string; code?: string; position?: AvatarPosition }) => void
+  ) => void;
+  'signal:offer': (
+    payload: WebRTCOfferPayload,
+    callback?: (response: SignalingRelayResult) => void
+  ) => void;
+  'signal:answer': (
+    payload: WebRTCAnswerPayload,
+    callback?: (response: SignalingRelayResult) => void
+  ) => void;
+  'signal:ice': (
+    payload: WebRTCIcePayload,
+    callback?: (response: SignalingRelayResult) => void
   ) => void;
   'presence:ping': () => void;
 }

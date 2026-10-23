@@ -2,12 +2,14 @@ import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import { PresenceService } from './modules/presence/presence.service';
 import { ProximityService } from './modules/proximity/proximity.service';
+import { SignalingService } from './modules/signaling/signaling.service';
 import { IOfficeRepository, IUserRepository } from './shared/contracts/repository.interfaces';
 import { IAuthService } from './shared/contracts/user.types';
 
 export interface AppDependencies {
   presenceService?: PresenceService;
   proximityService?: ProximityService;
+  signalingService?: SignalingService;
   officeRepo?: IOfficeRepository;
   userRepo?: IUserRepository;
   authService?: IAuthService;

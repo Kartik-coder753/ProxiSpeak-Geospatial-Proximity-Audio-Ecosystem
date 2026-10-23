@@ -11,6 +11,7 @@ import { PresenceService } from './modules/presence/presence.service';
 import { registerPresenceHandlers, TypedServer } from './modules/presence/presence.socket';
 import { ProximityService } from './modules/proximity/proximity.service';
 import { SignalingService } from './modules/signaling/signaling.service';
+import { registerSignalingHandlers } from './modules/signaling/signaling.socket';
 
 dotenv.config();
 
@@ -46,10 +47,18 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
   );
 
   proximityService.setPresenceReader(presenceService);
+  signalingService.setProximityService(proximityService);
+  signalingService.setPresenceReader(presenceService);
+
+  // Subscribe signaling service to peer eligibility changes from proximity service
+  proximityService.subscribeToPeerChanges((event) => {
+    signalingService.onPeerEligibilityChanged(event);
+  });
 
   const app = createApp({
     presenceService,
     proximityService,
+    signalingService,
     officeRepo,
     userRepo,
     authService,
@@ -66,6 +75,7 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
 
   // Register presence, proximity and signaling handlers using injected dependencies
   registerPresenceHandlers(io, presenceService, authService);
+  registerSignalingHandlers(io, signalingService, presenceService);
 
   // Mount Vite middlewares in dev mode so the single server hosts API, Sockets & UI
   const isDev = process.env.NODE_ENV !== 'production' && !process.env.VITEST;
