@@ -22,6 +22,7 @@ describe('MovementValidator Unit Tests', () => {
         height: 300,
       },
     ],
+    layoutVersion: 1,
     createdAt: new Date(),
   };
 

@@ -1,5 +1,5 @@
+import { Office, OfficeLayoutDto, OfficeMembership, OfficeRole } from './office.types';
 import { User } from './user.types';
-import { Office, OfficeMembership, OfficeRole } from './office.types';
 
 export interface IUserRepository {
   findById(id: string): Promise<User | null>;
@@ -12,6 +12,7 @@ export interface IOfficeRepository {
   findById(id: string): Promise<Office | null>;
   listOffices(): Promise<Office[]>;
   create(office: Omit<Office, 'createdAt'>): Promise<Office>;
+  updateLayout(officeId: string, layout: Partial<OfficeLayoutDto>): Promise<Office | null>;
 }
 
 export interface IMembershipRepository {

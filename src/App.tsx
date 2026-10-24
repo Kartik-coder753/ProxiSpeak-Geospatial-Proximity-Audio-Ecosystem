@@ -18,10 +18,14 @@ import {
   Mic,
   MicOff,
   Volume2,
+  VolumeX,
   PhoneCall,
   PhoneOff,
+  Building,
+  Sliders,
+  CheckCircle,
 } from 'lucide-react';
-import { Office } from './shared/contracts/office.types';
+import { Office, Obstacle, SoundOcclusionResult } from './shared/contracts/office.types';
 import {
   AvatarPosition,
   PresenceSnapshot,
@@ -38,6 +42,7 @@ import {
   InboundAnswerEvent,
   InboundIceEvent,
 } from './shared/contracts/signaling.interface';
+import { GeometryService } from './modules/offices/geometry.service';
 
 type TypedClientSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -69,6 +74,8 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun1.l.google.com:19302' },
   ],
 };
+
+const clientGeometry = new GeometryService();
 
 export default function App() {
   const [healthStatus, setHealthStatus] = useState<{ status: string; uptime: number } | null>(null);
@@ -136,7 +143,6 @@ export default function App() {
         setMicActive(true);
         addLog('success', 'Microphone stream captured successfully.');
 
-        // Add track to all active peer connections
         const audioTrack = stream.getAudioTracks()[0];
         activePeerConnectionsRef.current.forEach(({ pc }) => {
           pc.getSenders().forEach((s) => {
@@ -146,7 +152,6 @@ export default function App() {
           });
         });
       } catch (err) {
-        // Fallback to Web Audio synthetic tone so testing works without hardware mic permissions!
         try {
           const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
           const osc = audioCtx.createOscillator();
@@ -163,7 +168,19 @@ export default function App() {
     }
   };
 
-  // Fetch initial system state and proximity config
+  // Fetch initial system state and office layout
+  const refreshOfficeLayout = useCallback(async (officeId: string) => {
+    try {
+      const res = await fetch(`/api/offices/${officeId}/layout`);
+      if (res.ok) {
+        const layout = await res.json();
+        setCurrentOffice((prev) => prev ? { ...prev, ...layout } : layout);
+      }
+    } catch {
+      // fallback
+    }
+  }, []);
+
   useEffect(() => {
     const fetchSystemInfo = async () => {
       try {
@@ -177,6 +194,10 @@ export default function App() {
         if (officesRes.ok) {
           const o = await officesRes.json();
           setOffices(o);
+          if (!currentOffice && o.length > 0) {
+            const initial = o.find((item: Office) => item.id === selectedOfficeId) || o[0];
+            setCurrentOffice(initial);
+          }
         }
 
         const usersRes = await fetch('/api/auth/demo-users');
@@ -201,7 +222,7 @@ export default function App() {
     fetchSystemInfo();
     const interval = setInterval(fetchSystemInfo, 6000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentOffice, selectedOfficeId, selectedUser]);
 
   // Poll proximity peers for active user
   useEffect(() => {
@@ -248,7 +269,6 @@ export default function App() {
       socketRef.current.disconnect();
     }
 
-    // Teardown all existing peer connections
     activePeerConnectionsRef.current.forEach(({ pc }) => pc.close());
     activePeerConnectionsRef.current.clear();
     setPeerConnections({});
@@ -306,9 +326,13 @@ export default function App() {
       setMyPosition(data.currentPosition);
     });
 
-    // --- WebRTC Signaling Handlers (Person 3) ---
+    // Office layout update event (Person 4)
+    s.on('office:layout_updated' as any, (data: any) => {
+      addLog('info', `[Office Layout Updated] New version #${data.layout.layoutVersion} broadcast received.`);
+      setCurrentOffice((prev) => (prev ? { ...prev, ...data.layout } : data.layout));
+    });
 
-    // 1. Proximity Eligibility Trigger: Server indicates peer entered earshot!
+    // WebRTC Signaling Handlers (Person 3)
     s.on('signal:peer_eligible', async (data: PeerEligibleEvent) => {
       addLog('info', `[WebRTC Signaling] Peer eligible: ${data.peerUserId} (negId: ${data.negotiationId.slice(-8)}, initiate: ${data.shouldInitiate})`);
 
@@ -319,7 +343,6 @@ export default function App() {
         isPolite: data.isPolite,
       });
 
-      // Update state for UI
       setPeerConnections((prev) => ({
         ...prev,
         [data.peerUserId]: {
@@ -332,12 +355,10 @@ export default function App() {
         },
       }));
 
-      // Attach local audio track if available
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current!));
       }
 
-      // Handle remote audio stream
       pc.ontrack = (event) => {
         addLog('success', `Received audio stream from peer ${data.peerUserId}`);
         const remoteAudio = new Audio();
@@ -349,7 +370,6 @@ export default function App() {
         }));
       };
 
-      // Handle ICE Candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           s.emit('signal:ice', {
@@ -374,7 +394,6 @@ export default function App() {
         });
       };
 
-      // Deterministic offerer initiates SDP offer
       if (data.shouldInitiate) {
         try {
           const offer = await pc.createOffer();
@@ -400,7 +419,6 @@ export default function App() {
       }
     });
 
-    // 2. Incoming SDP Offer
     s.on('signal:offer', async (data: InboundOfferEvent) => {
       addLog('info', `[WebRTC Signaling] Received SDP offer from ${data.senderUserId}`);
       let entry = activePeerConnectionsRef.current.get(data.senderUserId);
@@ -418,7 +436,7 @@ export default function App() {
           if (data.isPolite) {
             await pc.setLocalDescription({ type: 'rollback' });
           } else {
-            addLog('warn', `Offer collision: impolite peer ${data.senderUserId} maintaining state`);
+            addLog('warn', `Offer collision: impolite peer maintaining state`);
           }
         }
 
@@ -446,7 +464,6 @@ export default function App() {
       }
     });
 
-    // 3. Incoming SDP Answer
     s.on('signal:answer', async (data: InboundAnswerEvent) => {
       addLog('info', `[WebRTC Signaling] Received SDP answer from ${data.senderUserId}`);
       const entry = activePeerConnectionsRef.current.get(data.senderUserId);
@@ -460,19 +477,17 @@ export default function App() {
       }
     });
 
-    // 4. Incoming ICE Candidate
     s.on('signal:ice', async (data: InboundIceEvent) => {
       const entry = activePeerConnectionsRef.current.get(data.senderUserId);
       if (entry) {
         try {
           await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate as RTCIceCandidateInit));
         } catch {
-          // ignore transient candidates
+          // ignore
         }
       }
     });
 
-    // 5. Peer Exited Earshot
     s.on('signal:peer_ineligible', (data: PeerIneligibleEvent) => {
       closePeerConnection(data.peerUserId, data.reason);
     });
@@ -487,8 +502,7 @@ export default function App() {
       return;
     }
 
-    const office = offices.find((o) => o.id === officeId);
-    setCurrentOffice(office ?? null);
+    refreshOfficeLayout(officeId);
     addLog('info', `Requesting entry to office '${officeId}'...`);
 
     socketRef.current.emit(
@@ -515,7 +529,7 @@ export default function App() {
         }
       }
     );
-  }, [connected, offices, selectedUser, addLog]);
+  }, [connected, refreshOfficeLayout, selectedUser, addLog]);
 
   const handleLeaveOffice = useCallback(() => {
     if (!socketRef.current || !selectedOfficeId) return;
@@ -569,8 +583,11 @@ export default function App() {
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
-    const scaleX = currentOffice.bounds.maxX / rect.width;
-    const scaleY = currentOffice.bounds.maxY / rect.height;
+    const maxX = currentOffice.bounds?.maxX || currentOffice.width || 1200;
+    const maxY = currentOffice.bounds?.maxY || currentOffice.height || 800;
+
+    const scaleX = maxX / rect.width;
+    const scaleY = maxY / rect.height;
 
     const actualX = Math.round(clickX * scaleX);
     const actualY = Math.round(clickY * scaleY);
@@ -600,7 +617,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [inOffice, myPosition, sendMove]);
 
-  // Secondary client (Bob) simulation with full WebRTC signaling response
+  // Secondary client (Bob) simulation
   const toggleSimBob = () => {
     if (simBobActive) {
       if (simBobSocketRef.current) {
@@ -633,7 +650,6 @@ export default function App() {
         );
       });
 
-      // Bob WebRTC responder logic
       bobSocket.on('signal:offer', async (data: InboundOfferEvent) => {
         addLog('info', `Simulated Bob received offer from ${data.senderUserId}; generating answer...`);
         const bobPc = new RTCPeerConnection(RTC_CONFIG);
@@ -678,13 +694,59 @@ export default function App() {
         if (simBobPcRef.current) {
           simBobPcRef.current.close();
           simBobPcRef.current = null;
-          addLog('info', 'Simulated Bob closed peer connection (out of earshot).');
+          addLog('info', 'Simulated Bob closed peer connection.');
         }
       });
 
       simBobSocketRef.current = bobSocket;
     }
   };
+
+  // Test layout update as Admin (Alice)
+  const handleAdminUpdateLayout = async () => {
+    if (!selectedUser) return;
+    try {
+      const res = await fetch(`/api/offices/${selectedOfficeId}/layout`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: selectedUser.simpleToken,
+        },
+        body: JSON.stringify({
+          name: `${currentOffice?.name} (Renovated)`,
+          obstacles: [
+            ...(currentOffice?.obstacles || []),
+            {
+              id: `wall-added-${Date.now()}`,
+              name: 'Added Soundproof Partition',
+              shape: 'wall',
+              x1: 600,
+              y1: 150,
+              x2: 600,
+              y2: 450,
+              thickness: 10,
+              blocksMovement: true,
+              blocksSound: true,
+              attenuation: 0,
+            },
+          ],
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        addLog('success', `Layout updated successfully by ${selectedUser.user.displayName}! Version: #${data.layout.layoutVersion}`);
+        setCurrentOffice(data.layout);
+      } else {
+        addLog('error', `Layout update failed (${res.status}): ${data.error}`);
+      }
+    } catch (err) {
+      addLog('error', `Error updating layout: ${(err as Error).message}`);
+    }
+  };
+
+  const maxX = currentOffice?.bounds?.maxX || currentOffice?.width || 1200;
+  const maxY = currentOffice?.bounds?.maxY || currentOffice?.height || 800;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -703,12 +765,15 @@ export default function App() {
               <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 P2: Proximity
               </span>
-              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center gap-1">
-                <Volume2 className="h-3 w-3" /> P3: WebRTC Signaling
+              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                P3: WebRTC
+              </span>
+              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                <Building className="h-3 w-3" /> P4: Persistence & Geometry
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Proximity-Authorized WebRTC Signaling • SDP Offer/Answer • ICE Exchange • Perfect Negotiation • Hysteresis
+              Persistent Office Layouts • Sound Obstacle Occlusion • Redis Multi-Instance Adapter • Master Integration QA
             </p>
           </div>
         </div>
@@ -728,9 +793,11 @@ export default function App() {
           </button>
 
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
-            <PhoneCall className="h-4 w-4 text-purple-400" />
-            <span className="text-slate-400">WebRTC Channels:</span>
-            <span className="font-semibold text-purple-300">{Object.keys(peerConnections).length}</span>
+            <ServerIcon className="h-4 w-4 text-emerald-400" />
+            <span className="text-slate-400">Health:</span>
+            <span className="font-semibold text-emerald-400">
+              {healthStatus?.status === 'ok' ? 'Online' : 'Checking...'}
+            </span>
           </div>
 
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
@@ -757,6 +824,7 @@ export default function App() {
             <div className="space-y-2 mb-4">
               {demoAccounts.map((acc) => {
                 const isSelected = selectedUser?.user.id === acc.user.id;
+                const isAdmin = acc.user.id === 'user-alice';
                 return (
                   <button
                     key={acc.user.id}
@@ -777,7 +845,14 @@ export default function App() {
                         className="h-7 w-7 rounded-full bg-slate-800 border border-slate-700"
                       />
                       <div>
-                        <div className="font-semibold">{acc.user.displayName}</div>
+                        <div className="font-semibold flex items-center gap-1.5">
+                          {acc.user.displayName}
+                          {isAdmin && (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                              Admin
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[10px] text-slate-400 font-mono">
                           {acc.simpleToken}
                         </div>
@@ -801,11 +876,11 @@ export default function App() {
             </button>
           </div>
 
-          {/* Office Selection & Membership Card */}
+          {/* Office Selection & Layout Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <Users className="h-4 w-4 text-emerald-400" />
-              2. Virtual Office Room
+              <Building className="h-4 w-4 text-amber-400" />
+              2. Persisted Office Layout
             </h2>
 
             <div className="space-y-3 mb-4">
@@ -815,10 +890,13 @@ export default function App() {
                 return (
                   <div
                     key={off.id}
-                    onClick={() => setSelectedOfficeId(off.id)}
+                    onClick={() => {
+                      setSelectedOfficeId(off.id);
+                      refreshOfficeLayout(off.id);
+                    }}
                     className={`p-3 rounded-lg border cursor-pointer transition ${
                       isSelected
-                        ? 'border-emerald-500/60 bg-emerald-500/10 text-white'
+                        ? 'border-amber-500/60 bg-amber-500/10 text-white'
                         : 'border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-700'
                     }`}
                   >
@@ -834,8 +912,9 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                      Bounds: {off.bounds.maxX}x{off.bounds.maxY}px
+                    <div className="text-[10px] text-slate-500 mt-1 font-mono flex justify-between">
+                      <span>Bounds: {off.bounds?.maxX || off.width}x{off.bounds?.maxY || off.height}px</span>
+                      <span className="text-amber-400">Version: #{off.layoutVersion || 1}</span>
                     </div>
                   </div>
                 );
@@ -843,12 +922,21 @@ export default function App() {
             </div>
 
             {inOffice ? (
-              <button
-                onClick={handleLeaveOffice}
-                className="w-full py-2 px-3 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-semibold transition flex items-center justify-center gap-2"
-              >
-                <LogOut className="h-3.5 w-3.5" /> Leave Office
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={handleLeaveOffice}
+                  className="w-full py-2 px-3 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-semibold transition flex items-center justify-center gap-2"
+                >
+                  <LogOut className="h-3.5 w-3.5" /> Leave Office
+                </button>
+
+                <button
+                  onClick={handleAdminUpdateLayout}
+                  className="w-full py-2 px-3 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-xs font-semibold transition flex items-center justify-center gap-2"
+                >
+                  <Sliders className="h-3.5 w-3.5" /> Test Layout Update (PUT API)
+                </button>
+              </div>
             ) : (
               <button
                 onClick={() => handleJoinOffice(selectedOfficeId)}
@@ -871,12 +959,8 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-2">
               <Zap className="h-4 w-4 text-purple-400" />
-              WebRTC Audio Peer Simulator
+              WebRTC Audio Simulator
             </h2>
-            <p className="text-xs text-slate-400 mb-3">
-              Spawn Bob in the room to test proximity-triggered SDP offer/answer relay and ICE candidate exchange:
-            </p>
-
             <button
               onClick={toggleSimBob}
               className={`w-full py-2 px-3 rounded-lg text-xs font-semibold border transition ${
@@ -885,12 +969,12 @@ export default function App() {
                   : 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30'
               }`}
             >
-              {simBobActive ? 'Disconnect Bob WebRTC Peer' : 'Spawn Bob to Test WebRTC Signaling'}
+              {simBobActive ? 'Disconnect Bob WebRTC Peer' : 'Spawn Bob to Test Spatial Audio'}
             </button>
           </div>
         </div>
 
-        {/* Center Canvas: Live 2D Office with Visual Earshot Radius & Audio Connections */}
+        {/* Center Canvas: Live 2D Office with Obstacles & Sound Occlusion */}
         <div className="lg:col-span-2 flex flex-col space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex-1 flex flex-col">
             <div className="flex items-center justify-between mb-3">
@@ -905,7 +989,7 @@ export default function App() {
                   <>
                     <span>Position: ({myPosition.x}, {myPosition.y})</span>
                     <span className="text-emerald-400">Online: {activeUsers.length}</span>
-                    <span className="text-purple-400">WebRTC Channels: {Object.keys(peerConnections).length}</span>
+                    <span className="text-amber-400">Version: #{currentOffice?.layoutVersion || 1}</span>
                   </>
                 )}
               </div>
@@ -926,22 +1010,57 @@ export default function App() {
                   <Lock className="h-8 w-8 text-slate-600 mb-2" />
                   <p className="text-sm font-medium text-slate-300">Office Room Not Active</p>
                   <p className="text-xs text-slate-500 max-w-sm mt-1">
-                    Connect an authenticated socket and click &ldquo;Enter Selected Office&rdquo; to test real-time WebRTC audio signaling.
+                    Connect an authenticated socket and click &ldquo;Enter Selected Office&rdquo; to test real-time sound occlusion and movement.
                   </p>
                 </div>
               )}
 
-              {/* Render Obstacles / Walls / Desks */}
+              {/* Render Obstacles / Walls / Furniture */}
               {currentOffice?.obstacles.map((obs) => {
-                const leftPct = (obs.x / currentOffice.bounds.maxX) * 100;
-                const topPct = (obs.y / currentOffice.bounds.maxY) * 100;
-                const widthPct = (obs.width / currentOffice.bounds.maxX) * 100;
-                const heightPct = (obs.height / currentOffice.bounds.maxY) * 100;
+                const isWall = obs.shape === 'wall' || ('x1' in obs && 'y1' in obs);
+                const isPoly = obs.shape === 'polygon' || 'points' in obs;
+
+                if (isWall) {
+                  const w = obs as any;
+                  const leftPct = (Math.min(w.x1, w.x2) / maxX) * 100;
+                  const topPct = (Math.min(w.y1, w.y2) / maxY) * 100;
+                  const widthPct = (Math.max(Math.abs(w.x2 - w.x1), w.thickness || 8) / maxX) * 100;
+                  const heightPct = (Math.max(Math.abs(w.y2 - w.y1), w.thickness || 8) / maxY) * 100;
+
+                  return (
+                    <div
+                      key={obs.id}
+                      className="absolute bg-rose-500/40 border-2 border-rose-400 rounded-sm shadow pointer-events-none"
+                      style={{
+                        left: `${leftPct}%`,
+                        top: `${topPct}%`,
+                        width: `${widthPct}%`,
+                        height: `${heightPct}%`,
+                      }}
+                    >
+                      <span className="absolute -top-4 left-0 text-[9px] font-mono text-rose-300 whitespace-nowrap bg-slate-900/80 px-1 rounded">
+                        {obs.name} {obs.blocksSound ? '(Soundproof Wall)' : ''}
+                      </span>
+                    </div>
+                  );
+                }
+
+                // Rectangle
+                const r = obs as any;
+                const leftPct = (r.x / maxX) * 100;
+                const topPct = (r.y / maxY) * 100;
+                const widthPct = (r.width / maxX) * 100;
+                const heightPct = (r.height / maxY) * 100;
+                const isSoundproof = obs.blocksSound && obs.attenuation === 0;
 
                 return (
                   <div
                     key={obs.id}
-                    className="absolute bg-rose-950/40 border border-rose-500/40 rounded flex flex-col items-center justify-center p-1 shadow pointer-events-none"
+                    className={`absolute rounded flex flex-col items-center justify-center p-1 shadow pointer-events-none border ${
+                      isSoundproof
+                        ? 'bg-rose-950/50 border-rose-500/60'
+                        : 'bg-slate-800/60 border-slate-600/60'
+                    }`}
                     style={{
                       left: `${leftPct}%`,
                       top: `${topPct}%`,
@@ -949,37 +1068,35 @@ export default function App() {
                       height: `${heightPct}%`,
                     }}
                   >
-                    <span className="text-[10px] font-bold text-rose-300 tracking-wider uppercase text-center px-1">
+                    <span className="text-[10px] font-bold text-slate-200 tracking-wider text-center px-1">
                       {obs.name}
                     </span>
-                    <span className="text-[9px] text-rose-400/80 font-mono">
-                      Obstacle
+                    <span className="text-[9px] text-slate-400 font-mono">
+                      {obs.blocksSound ? `Blocks Sound (${(obs.attenuation ?? 0) * 100}% pass)` : 'Furniture'}
                     </span>
                   </div>
                 );
               })}
 
-              {/* Render Proximity Radius Circles around active user */}
+              {/* Render Proximity Radius Circles */}
               {inOffice && currentOffice && (
                 <>
-                  {/* 110px Hysteresis Exit Circle (dashed amber) */}
                   <div
                     className="absolute rounded-full border border-dashed border-amber-400/40 pointer-events-none -translate-x-1/2 -translate-y-1/2"
                     style={{
-                      left: `${(myPosition.x / currentOffice.bounds.maxX) * 100}%`,
-                      top: `${(myPosition.y / currentOffice.bounds.maxY) * 100}%`,
-                      width: `${((proximityConfig.exitRadius * 2) / currentOffice.bounds.maxX) * 100}%`,
-                      height: `${((proximityConfig.exitRadius * 2) / currentOffice.bounds.maxY) * 100}%`,
+                      left: `${(myPosition.x / maxX) * 100}%`,
+                      top: `${(myPosition.y / maxY) * 100}%`,
+                      width: `${((proximityConfig.exitRadius * 2) / maxX) * 100}%`,
+                      height: `${((proximityConfig.exitRadius * 2) / maxY) * 100}%`,
                     }}
                   />
-                  {/* 100px Entry Earshot Circle (solid emerald with subtle glow) */}
                   <div
                     className="absolute rounded-full border-2 border-emerald-500/40 bg-emerald-500/5 pointer-events-none -translate-x-1/2 -translate-y-1/2 shadow-lg shadow-emerald-500/10"
                     style={{
-                      left: `${(myPosition.x / currentOffice.bounds.maxX) * 100}%`,
-                      top: `${(myPosition.y / currentOffice.bounds.maxY) * 100}%`,
-                      width: `${((proximityConfig.entryRadius * 2) / currentOffice.bounds.maxX) * 100}%`,
-                      height: `${((proximityConfig.entryRadius * 2) / currentOffice.bounds.maxY) * 100}%`,
+                      left: `${(myPosition.x / maxX) * 100}%`,
+                      top: `${(myPosition.y / maxY) * 100}%`,
+                      width: `${((proximityConfig.entryRadius * 2) / maxX) * 100}%`,
+                      height: `${((proximityConfig.entryRadius * 2) / maxY) * 100}%`,
                     }}
                   />
                 </>
@@ -991,11 +1108,21 @@ export default function App() {
                 activeUsers.map((member) => {
                   const isMe = member.userId === selectedUser?.user.id;
                   const pos = isMe ? myPosition : member.position;
-                  const leftPct = (pos.x / currentOffice.bounds.maxX) * 100;
-                  const topPct = (pos.y / currentOffice.bounds.maxY) * 100;
+                  const leftPct = (pos.x / maxX) * 100;
+                  const topPct = (pos.y / maxY) * 100;
 
+                  const isPeer = proximityPeers.some((p) => p.userId === member.userId);
                   const hasWebRtc = Boolean(peerConnections[member.userId]);
-                  const peerState = peerConnections[member.userId];
+
+                  // Check sound occlusion line of sight
+                  let soundOcclusion: SoundOcclusionResult | null = null;
+                  if (!isMe && isPeer) {
+                    soundOcclusion = clientGeometry.checkSoundObstruction(
+                      { x: myPosition.x, y: myPosition.y },
+                      { x: member.position.x, y: member.position.y },
+                      currentOffice.obstacles
+                    );
+                  }
 
                   return (
                     <div
@@ -1011,7 +1138,9 @@ export default function App() {
                           isMe
                             ? 'border-indigo-400 bg-indigo-600 shadow-indigo-500/50 scale-105'
                             : hasWebRtc
-                            ? 'border-purple-400 bg-purple-600 shadow-purple-500/60 ring-2 ring-purple-400/50'
+                            ? soundOcclusion?.isBlocked
+                              ? 'border-rose-400 bg-rose-600 shadow-rose-500/60 ring-2 ring-rose-400/50'
+                              : 'border-purple-400 bg-purple-600 shadow-purple-500/60 ring-2 ring-purple-400/50'
                             : 'border-slate-500 bg-slate-700 shadow-slate-900/40'
                         }`}
                       >
@@ -1022,11 +1151,15 @@ export default function App() {
                         />
                       </div>
                       <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-[10px] font-semibold text-white whitespace-nowrap shadow flex items-center gap-1">
-                        {hasWebRtc && <Volume2 className="h-2.5 w-2.5 text-purple-400 animate-pulse" />}
+                        {soundOcclusion?.isBlocked ? (
+                          <VolumeX className="h-2.5 w-2.5 text-rose-400" />
+                        ) : hasWebRtc ? (
+                          <Volume2 className="h-2.5 w-2.5 text-purple-400 animate-pulse" />
+                        ) : null}
                         <span>{member.user.displayName} {isMe ? '(You)' : ''}</span>
-                        {peerState && (
-                          <span className="text-[9px] text-purple-300 font-mono">
-                            [{peerState.connectionState || 'connecting'}]
+                        {soundOcclusion && (
+                          <span className={`text-[9px] font-mono ${soundOcclusion.isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {soundOcclusion.isBlocked ? '[Wall Muted]' : `[${Math.round(soundOcclusion.totalTransmission * 100)}% vol]`}
                           </span>
                         )}
                       </div>
@@ -1039,56 +1172,76 @@ export default function App() {
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="text-slate-400 flex items-center gap-1.5">
                 <span className="font-semibold text-slate-300">Controls:</span>
-                <span>Click canvas or use WASD/Arrows to walk. WebRTC signaling automatically triggers when within 100px.</span>
+                <span>WASD / Arrow Keys or Click to move. Red walls block movement and occlude acoustic line-of-sight.</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: WebRTC Peer Connections & Live Signaling Audit */}
+        {/* Right Column: Active Channels & Sound Occlusion Inspector */}
         <div className="space-y-6 lg:col-span-1">
           {/* Active WebRTC Peer Channels */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <PhoneCall className="h-4 w-4 text-purple-400" />
-                Active WebRTC Peers
+                Audio Channels & Occlusion
               </span>
               <span className="text-xs px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 font-mono">
-                {Object.keys(peerConnections).length} active
+                {proximityPeers.length} in earshot
               </span>
             </h3>
 
-            {Object.keys(peerConnections).length === 0 ? (
+            {proximityPeers.length === 0 ? (
               <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800/80 text-center">
                 <PhoneOff className="h-6 w-6 text-slate-600 mx-auto mb-1.5" />
-                <p className="text-xs text-slate-400">No WebRTC peer connections.</p>
-                <p className="text-[11px] text-slate-500 mt-1">Walk within 100px of another user or spawn Bob.</p>
+                <p className="text-xs text-slate-400">No peers within 100px earshot.</p>
+                <p className="text-[11px] text-slate-500 mt-1">Walk close to Bob to establish audio.</p>
               </div>
             ) : (
               <div className="space-y-2.5">
-                {Object.values(peerConnections).map((peer) => {
-                  const member = activeUsers.find((u) => u.userId === peer.peerUserId);
+                {proximityPeers.map((peer) => {
+                  const member = activeUsers.find((u) => u.userId === peer.userId);
+                  const occlusion = currentOffice
+                    ? clientGeometry.checkSoundObstruction(
+                        { x: myPosition.x, y: myPosition.y },
+                        { x: member?.position.x ?? 0, y: member?.position.y ?? 0 },
+                        currentOffice.obstacles
+                      )
+                    : null;
+
                   return (
                     <div
-                      key={peer.peerUserId}
-                      className="p-2.5 rounded-lg bg-purple-950/20 border border-purple-500/30 text-xs flex flex-col gap-1.5"
+                      key={peer.userId}
+                      className={`p-2.5 rounded-lg border text-xs flex flex-col gap-1.5 ${
+                        occlusion?.isBlocked
+                          ? 'bg-rose-950/20 border-rose-500/30'
+                          : 'bg-purple-950/20 border-purple-500/30'
+                      }`}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="h-2 w-2 rounded-full bg-purple-400 animate-ping" />
+                          {occlusion?.isBlocked ? (
+                            <VolumeX className="h-3.5 w-3.5 text-rose-400" />
+                          ) : (
+                            <Volume2 className="h-3.5 w-3.5 text-purple-400" />
+                          )}
                           <span className="font-semibold text-slate-200">
-                            {member?.user.displayName ?? peer.peerUserId}
+                            {member?.user.displayName ?? peer.userId}
                           </span>
                         </div>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
-                          {peer.isOfferer ? 'Offerer' : 'Answerer (Polite)'}
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
+                          occlusion?.isBlocked
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}>
+                          {occlusion?.isBlocked ? 'Soundproof Wall Muted (0%)' : `Audible (${Math.round((occlusion?.totalTransmission ?? 1) * 100)}%)`}
                         </span>
                       </div>
 
-                      <div className="text-[10px] text-slate-400 font-mono grid grid-cols-2 gap-1 bg-slate-950/60 p-1.5 rounded">
-                        <div>State: <span className="text-purple-300 font-semibold">{peer.connectionState || 'connecting'}</span></div>
-                        <div>ICE: <span className="text-cyan-300 font-semibold">{peer.iceConnectionState || 'new'}</span></div>
+                      <div className="text-[10px] text-slate-400 font-mono flex justify-between bg-slate-950/60 p-1.5 rounded">
+                        <span>Distance: {peer.distance} px</span>
+                        <span>Gain: {occlusion?.totalTransmission ?? 1.0}</span>
                       </div>
                     </div>
                   );
@@ -1102,7 +1255,7 @@ export default function App() {
             <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <Layers className="h-4 w-4 text-indigo-400" />
-                Signaling Event Log
+                Integration Event Log
               </span>
               <button
                 onClick={() => setLogs([])}
@@ -1114,7 +1267,7 @@ export default function App() {
 
             <div className="flex-1 overflow-y-auto space-y-1.5 font-mono text-[11px] pr-1">
               {logs.length === 0 ? (
-                <p className="text-slate-600 text-xs italic py-2">Waiting for WebRTC signaling events...</p>
+                <p className="text-slate-600 text-xs italic py-2">Waiting for multi-module events...</p>
               ) : (
                 logs.map((log) => {
                   let color = 'text-slate-400';

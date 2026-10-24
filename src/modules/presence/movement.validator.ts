@@ -1,5 +1,6 @@
 import { AvatarPosition, FacingDirection, MoveValidationResult } from '../../shared/contracts/presence.types';
 import { Office, RectObstacle } from '../../shared/contracts/office.types';
+import { GeometryService } from '../offices/geometry.service';
 
 export interface MovementValidatorConfig {
   maxSpeedPixelsPerSecond: number;
@@ -16,7 +17,10 @@ export const DEFAULT_MOVEMENT_CONFIG: MovementValidatorConfig = {
 };
 
 export class MovementValidator {
-  constructor(private readonly config: MovementValidatorConfig = DEFAULT_MOVEMENT_CONFIG) {}
+  constructor(
+    private readonly config: MovementValidatorConfig = DEFAULT_MOVEMENT_CONFIG,
+    private readonly geometryService: GeometryService = new GeometryService()
+  ) {}
 
   /**
    * Authoritative validation of avatar movement updates.
@@ -96,15 +100,20 @@ export class MovementValidator {
       };
     }
 
-    // 5. Collision detection with office obstacles/walls
-    for (const obstacle of office.obstacles) {
-      if (this.checkCollision(target.x, target.y, radius, obstacle)) {
-        return {
-          isValid: false,
-          code: 'COLLISION',
-          reason: `Position collides with obstacle '${obstacle.name}'`,
-        };
-      }
+    // 5. Collision detection with office obstacles/walls via GeometryService
+    const collidingObstacle = this.geometryService.checkAvatarCollision(
+      target.x,
+      target.y,
+      radius,
+      office.obstacles
+    );
+
+    if (collidingObstacle) {
+      return {
+        isValid: false,
+        code: 'COLLISION',
+        reason: `Position collides with obstacle '${collidingObstacle.name}'`,
+      };
     }
 
     // Determine facing direction if not explicitly supplied

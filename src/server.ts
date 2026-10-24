@@ -12,6 +12,9 @@ import { registerPresenceHandlers, TypedServer } from './modules/presence/presen
 import { ProximityService } from './modules/proximity/proximity.service';
 import { SignalingService } from './modules/signaling/signaling.service';
 import { registerSignalingHandlers } from './modules/signaling/signaling.socket';
+import { OfficeService } from './modules/offices/office.service';
+import { GeometryService } from './modules/offices/geometry.service';
+import { setupSocketIoRedisAdapter } from './modules/infrastructure/redis.adapter';
 
 dotenv.config();
 
@@ -25,6 +28,8 @@ export interface ServerInstance {
   presenceService: PresenceService;
   proximityService: ProximityService;
   signalingService: SignalingService;
+  officeService: OfficeService;
+  geometryService: GeometryService;
   authService: AuthService;
   port: number;
   close: () => Promise<void>;
@@ -35,7 +40,8 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
   const authService = new AuthService(userRepo);
   const proximityService = new ProximityService();
   const signalingService = new SignalingService();
-  const movementValidator = new MovementValidator();
+  const geometryService = new GeometryService();
+  const movementValidator = new MovementValidator(undefined, geometryService);
 
   const presenceService = new PresenceService(
     userRepo,
@@ -55,16 +61,7 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
     signalingService.onPeerEligibilityChanged(event);
   });
 
-  const app = createApp({
-    presenceService,
-    proximityService,
-    signalingService,
-    officeRepo,
-    userRepo,
-    authService,
-  });
-
-  const httpServer = createServer(app);
+  const httpServer = createServer();
 
   const io = new Server(httpServer, {
     cors: {
@@ -72,6 +69,27 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
       credentials: true,
     },
   }) as TypedServer;
+
+  // Initialize officeService with live broadcast callback for layout updates
+  const officeService = new OfficeService(officeRepo, membershipRepo, (officeId, layout) => {
+    io.to(`office:${officeId}`).emit('office:layout_updated' as any, { officeId, layout });
+  });
+
+  const app = createApp({
+    presenceService,
+    proximityService,
+    signalingService,
+    officeService,
+    geometryService,
+    officeRepo,
+    userRepo,
+    authService,
+  });
+
+  httpServer.on('request', app);
+
+  // Configure Redis adapter if environment variables are set
+  const redisAdapterInstance = await setupSocketIoRedisAdapter(io);
 
   // Register presence, proximity and signaling handlers using injected dependencies
   registerPresenceHandlers(io, presenceService, authService);
@@ -106,6 +124,7 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
   const port = customPort ?? Number(process.env.PORT || 3000);
 
   const close = async () => {
+    await redisAdapterInstance.close();
     return new Promise<void>((resolve) => {
       io.close(() => {
         httpServer.close(() => {
@@ -121,6 +140,8 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
     presenceService,
     proximityService,
     signalingService,
+    officeService,
+    geometryService,
     authService,
     port,
     close,

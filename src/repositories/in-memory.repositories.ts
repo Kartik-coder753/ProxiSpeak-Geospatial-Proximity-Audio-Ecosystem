@@ -58,10 +58,29 @@ export class InMemoryOfficeRepository implements IOfficeRepository {
   async create(office: Omit<Office, 'createdAt'>): Promise<Office> {
     const newOffice: Office = {
       ...office,
+      layoutVersion: office.layoutVersion ?? 1,
       createdAt: new Date(),
     };
     this.offices.set(newOffice.id, newOffice);
     return newOffice;
+  }
+
+  async updateLayout(officeId: string, layout: Partial<import('../shared/contracts/office.types').OfficeLayoutDto>): Promise<Office | null> {
+    const office = this.offices.get(officeId);
+    if (!office) return null;
+
+    if (layout.name) office.name = layout.name;
+    if (layout.bounds) office.bounds = layout.bounds;
+    if (layout.width !== undefined && layout.height !== undefined) {
+      office.width = layout.width;
+      office.height = layout.height;
+      office.bounds = { minX: 0, minY: 0, maxX: layout.width, maxY: layout.height };
+    }
+    if (layout.obstacles) office.obstacles = layout.obstacles;
+    office.layoutVersion = (office.layoutVersion ?? 0) + 1;
+    office.updatedAt = new Date();
+
+    return office;
   }
 }
 
@@ -168,32 +187,47 @@ export function createSeedRepositories() {
       name: 'Infotact Main Campus',
       description: 'Primary collaborative workspace for engineering and product teams.',
       bounds: { minX: 0, minY: 0, maxX: 1200, maxY: 800 },
+      width: 1200,
+      height: 800,
+      layoutVersion: 1,
       accessPolicy: 'members_only',
       defaultSpawnPosition: { x: 200, y: 200 },
       obstacles: [
         {
           id: 'pod-1',
           name: 'Engineering Desks',
+          shape: 'rectangle',
           x: 400,
           y: 250,
           width: 250,
           height: 140,
+          blocksMovement: true,
+          blocksSound: false,
+          attenuation: 0.8,
         },
         {
           id: 'partition-wall',
           name: 'Conference Partition',
+          shape: 'rectangle',
           x: 800,
           y: 100,
           width: 30,
           height: 380,
+          blocksMovement: true,
+          blocksSound: true,
+          attenuation: 0,
         },
         {
           id: 'coffee-lounge',
           name: 'Coffee Bar',
+          shape: 'rectangle',
           x: 100,
           y: 550,
           width: 180,
           height: 100,
+          blocksMovement: true,
+          blocksSound: false,
+          attenuation: 0.9,
         },
       ],
       createdAt: new Date(),
@@ -203,16 +237,23 @@ export function createSeedRepositories() {
       name: 'Executive Boardroom',
       description: 'Private restricted boardroom for executive staff.',
       bounds: { minX: 0, minY: 0, maxX: 800, maxY: 600 },
+      width: 800,
+      height: 600,
+      layoutVersion: 1,
       accessPolicy: 'members_only',
       defaultSpawnPosition: { x: 150, y: 150 },
       obstacles: [
         {
           id: 'board-table',
           name: 'Conference Table',
+          shape: 'rectangle',
           x: 250,
           y: 200,
           width: 300,
           height: 200,
+          blocksMovement: true,
+          blocksSound: false,
+          attenuation: 0.8,
         },
       ],
       createdAt: new Date(),
@@ -222,16 +263,23 @@ export function createSeedRepositories() {
       name: 'Open Townhall',
       description: 'Public auditorium open to all visitors.',
       bounds: { minX: 0, minY: 0, maxX: 1600, maxY: 1000 },
+      width: 1600,
+      height: 1000,
+      layoutVersion: 1,
       accessPolicy: 'public',
       defaultSpawnPosition: { x: 300, y: 300 },
       obstacles: [
         {
           id: 'stage-podium',
           name: 'Stage',
+          shape: 'rectangle',
           x: 600,
           y: 50,
           width: 400,
           height: 120,
+          blocksMovement: true,
+          blocksSound: false,
+          attenuation: 0.9,
         },
       ],
       createdAt: new Date(),
