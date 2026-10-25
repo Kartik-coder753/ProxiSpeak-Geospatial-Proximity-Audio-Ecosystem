@@ -24,6 +24,17 @@ import {
   Building,
   Sliders,
   CheckCircle,
+  Bot,
+  Sparkles,
+  RefreshCw,
+  Play,
+  Square,
+  Maximize2,
+  Eye,
+  Info,
+  ChevronDown,
+  ChevronUp,
+  Gauge,
 } from 'lucide-react';
 import { Office, Obstacle, SoundOcclusionResult } from './shared/contracts/office.types';
 import {
@@ -66,6 +77,22 @@ interface PeerConnectionState {
   iceConnectionState: RTCIceConnectionState;
   isOfferer: boolean;
   hasAudio: boolean;
+  distance?: number;
+  occlusion?: SoundOcclusionResult;
+}
+
+interface SimulatedBot {
+  userId: string;
+  username: string;
+  displayName: string;
+  token: string;
+  roleTitle: string;
+  color: string;
+  active: boolean;
+  patrolActive: boolean;
+  position: { x: number; y: number };
+  waypoints: Array<{ x: number; y: number }>;
+  currentWaypointIndex: number;
 }
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -83,19 +110,30 @@ export default function App() {
   const [offices, setOffices] = useState<Office[]>([]);
   const [selectedUser, setSelectedUser] = useState<DemoAccount | null>(null);
   const [selectedOfficeId, setSelectedOfficeId] = useState<string>('infotact-office');
+  const [departmentFilter, setDepartmentFilter] = useState<string>('all');
 
   // Connection state
   const [connected, setConnected] = useState(false);
   const [inOffice, setInOffice] = useState(false);
   const [currentOffice, setCurrentOffice] = useState<Office | null>(null);
   const [activeUsers, setActiveUsers] = useState<PresenceUser[]>([]);
-  const [myPosition, setMyPosition] = useState<AvatarPosition>({ x: 200, y: 200, sequence: 0, timestamp: Date.now(), facing: 'down' });
+  const [myPosition, setMyPosition] = useState<AvatarPosition>({
+    x: 200,
+    y: 200,
+    sequence: 0,
+    timestamp: Date.now(),
+    facing: 'down',
+  });
   const [lastError, setLastError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   // Proximity & Peer Eligibility state (Person 2)
   const [proximityPeers, setProximityPeers] = useState<ProximityPeer[]>([]);
-  const [proximityConfig, setProximityConfig] = useState<{ entryRadius: number; exitRadius: number; staleTimeoutMs: number }>({
+  const [proximityConfig, setProximityConfig] = useState<{
+    entryRadius: number;
+    exitRadius: number;
+    staleTimeoutMs: number;
+  }>({
     entryRadius: 100,
     exitRadius: 110,
     staleTimeoutMs: 15000,
@@ -103,15 +141,98 @@ export default function App() {
 
   // WebRTC Audio & Signaling State (Person 3)
   const [micActive, setMicActive] = useState(false);
+  const [spatialAudioEnabled, setSpatialAudioEnabled] = useState(true);
   const [peerConnections, setPeerConnections] = useState<Record<string, PeerConnectionState>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
-  const activePeerConnectionsRef = useRef<Map<string, { pc: RTCPeerConnection; negotiationId: string; isPolite: boolean }>>(new Map());
+  const activePeerConnectionsRef = useRef<
+    Map<string, { pc: RTCPeerConnection; negotiationId: string; isPolite: boolean }>
+  >(new Map());
 
-  // Simulation of secondary peer (Bob)
-  const [simBobActive, setSimBobActive] = useState(false);
-  const simBobSocketRef = useRef<TypedClientSocket | null>(null);
-  const simBobPcRef = useRef<RTCPeerConnection | null>(null);
-  const [simBobPos, setSimBobPos] = useState<{ x: number; y: number; seq: number }>({ x: 260, y: 240, seq: 1 });
+  // Web Audio Context for synthesized realistic spatial audio feedback
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const peerAudioNodesRef = useRef<
+    Map<string, { osc: OscillatorNode; panner: StereoPannerNode; gain: GainNode }>
+  >(new Map());
+
+  // Automated simulated multi-peer bots
+  const [simBots, setSimBots] = useState<SimulatedBot[]>([
+    {
+      userId: 'user-bob',
+      username: 'bob',
+      displayName: 'Bob Martin',
+      token: 'token-bob',
+      roleTitle: 'Spatial Audio Lead',
+      color: '#a855f7',
+      active: false,
+      patrolActive: false,
+      position: { x: 260, y: 240 },
+      waypoints: [
+        { x: 260, y: 240 },
+        { x: 190, y: 210 },
+        { x: 740, y: 200 }, // in front of partition
+        { x: 860, y: 200 }, // behind soundproof partition!
+        { x: 260, y: 240 },
+      ],
+      currentWaypointIndex: 0,
+    },
+    {
+      userId: 'user-charlie',
+      username: 'charlie',
+      displayName: 'Charlie Kim',
+      token: 'token-charlie',
+      roleTitle: 'Staff Designer',
+      color: '#ec4899',
+      active: false,
+      patrolActive: false,
+      position: { x: 340, y: 180 },
+      waypoints: [
+        { x: 340, y: 180 },
+        { x: 210, y: 260 },
+        { x: 160, y: 480 },
+        { x: 340, y: 180 },
+      ],
+      currentWaypointIndex: 0,
+    },
+    {
+      userId: 'user-elena',
+      username: 'elena',
+      displayName: 'Elena Rostova',
+      token: 'token-elena',
+      roleTitle: 'Acoustic ML Scientist',
+      color: '#3b82f6',
+      active: false,
+      patrolActive: false,
+      position: { x: 760, y: 160 },
+      waypoints: [
+        { x: 760, y: 160 },
+        { x: 860, y: 260 }, // Behind partition
+        { x: 750, y: 350 },
+        { x: 760, y: 160 },
+      ],
+      currentWaypointIndex: 0,
+    },
+    {
+      userId: 'user-dexter',
+      username: 'dexter',
+      displayName: 'Dexter-9 (Bot)',
+      token: 'token-dexter',
+      roleTitle: 'Patrol Unit',
+      color: '#eab308',
+      active: false,
+      patrolActive: false,
+      position: { x: 200, y: 320 },
+      waypoints: [
+        { x: 200, y: 320 },
+        { x: 280, y: 220 },
+        { x: 140, y: 180 },
+        { x: 200, y: 320 },
+      ],
+      currentWaypointIndex: 0,
+    },
+  ]);
+
+  const botSocketsRef = useRef<Map<string, TypedClientSocket>>(new Map());
+  const botPcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
 
   const socketRef = useRef<TypedClientSocket | null>(null);
   const sequenceRef = useRef(1);
@@ -124,11 +245,80 @@ export default function App() {
       type,
       message,
     };
-    setLogs((prev) => [entry, ...prev.slice(0, 49)]);
+    setLogs((prev) => [entry, ...prev.slice(0, 59)]);
+  }, []);
+
+  // Web Audio spatial sound synthesizer setup
+  const initSpatialAudioEngine = useCallback(() => {
+    if (!audioCtxRef.current) {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        audioCtxRef.current = new AudioCtx();
+      }
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+  }, []);
+
+  // Update spatial audio nodes for peers in earshot
+  const updateSpatialAudio = useCallback(
+    (peerId: string, distance: number, occlusionTransmission: number, relativeX: number) => {
+      if (!spatialAudioEnabled) return;
+      initSpatialAudioEngine();
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+
+      let nodes = peerAudioNodesRef.current.get(peerId);
+      if (!nodes) {
+        try {
+          const osc = ctx.createOscillator();
+          const panner = ctx.createStereoPanner();
+          const gain = ctx.createGain();
+
+          // Subtle melodic tone for each peer
+          const hash = peerId.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(220 + (hash % 12) * 25, ctx.currentTime);
+
+          gain.gain.setValueAtTime(0, ctx.currentTime);
+
+          osc.connect(panner);
+          panner.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+
+          nodes = { osc, panner, gain };
+          peerAudioNodesRef.current.set(peerId, nodes);
+        } catch {
+          return;
+        }
+      }
+
+      // Distance attenuation (0 to 100px)
+      const distanceFactor = Math.max(0, 1 - distance / 110);
+      const targetVolume = distanceFactor * occlusionTransmission * 0.12;
+      const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
+
+      const now = ctx.currentTime;
+      nodes.gain.gain.setTargetAtTime(targetVolume, now, 0.08);
+      nodes.panner.pan.setTargetAtTime(targetPan, now, 0.08);
+    },
+    [spatialAudioEnabled, initSpatialAudioEngine]
+  );
+
+  const silencePeerAudio = useCallback((peerId: string) => {
+    const nodes = peerAudioNodesRef.current.get(peerId);
+    if (nodes && audioCtxRef.current) {
+      nodes.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.05);
+    }
   }, []);
 
   // Initialize synthetic or microphone audio track
   const toggleMicrophone = async () => {
+    initSpatialAudioEngine();
     if (micActive) {
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -153,14 +343,18 @@ export default function App() {
         });
       } catch (err) {
         try {
-          const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+          const audioCtx =
+            audioCtxRef.current ||
+            new (window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+          audioCtxRef.current = audioCtx;
           const osc = audioCtx.createOscillator();
           const dst = audioCtx.createMediaStreamDestination();
           osc.connect(dst);
           osc.start();
           localStreamRef.current = dst.stream;
           setMicActive(true);
-          addLog('info', 'Microphone permission not granted: initialized synthetic audio track for testing.');
+          addLog('info', 'Microphone not granted: initialized clean synthetic audio track for WebRTC.');
         } catch {
           addLog('error', `Failed to initialize audio: ${(err as Error).message}`);
         }
@@ -174,7 +368,7 @@ export default function App() {
       const res = await fetch(`/api/offices/${officeId}/layout`);
       if (res.ok) {
         const layout = await res.json();
-        setCurrentOffice((prev) => prev ? { ...prev, ...layout } : layout);
+        setCurrentOffice((prev) => (prev ? { ...prev, ...layout } : layout));
       }
     } catch {
       // fallback
@@ -202,7 +396,7 @@ export default function App() {
 
         const usersRes = await fetch('/api/auth/demo-users');
         if (usersRes.ok) {
-          const u = await usersRes.json();
+          const u: DemoAccount[] = await usersRes.json();
           setDemoAccounts(u);
           if (u.length > 0 && !selectedUser) {
             setSelectedUser(u[0]); // Default to Alice
@@ -224,10 +418,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentOffice, selectedOfficeId, selectedUser]);
 
-  // Poll proximity peers for active user
+  // Poll proximity peers for active user & update spatial audio nodes
   useEffect(() => {
-    if (!selectedUser || !inOffice) {
+    if (!selectedUser || !inOffice || !currentOffice) {
       setProximityPeers([]);
+      peerAudioNodesRef.current.forEach((node) => {
+        if (audioCtxRef.current) {
+          node.gain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
+        }
+      });
       return;
     }
 
@@ -236,7 +435,33 @@ export default function App() {
         const res = await fetch(`/api/proximity/peers/${selectedUser.user.id}`);
         if (res.ok) {
           const data = await res.json();
-          setProximityPeers(data.peers || []);
+          const peers: ProximityPeer[] = data.peers || [];
+          setProximityPeers(peers);
+
+          // Update audio synthesis for each peer
+          peers.forEach((p) => {
+            const member = activeUsers.find((u) => u.userId === p.userId);
+            if (member) {
+              const occlusion = clientGeometry.checkSoundObstruction(
+                { x: myPosition.x, y: myPosition.y },
+                { x: member.position.x, y: member.position.y },
+                currentOffice.obstacles
+              );
+              updateSpatialAudio(
+                p.userId,
+                p.distance,
+                occlusion.totalTransmission,
+                member.position.x - myPosition.x
+              );
+            }
+          });
+
+          // Silence any peer that left proximity
+          peerAudioNodesRef.current.forEach((_val, peerId) => {
+            if (!peers.some((p) => p.userId === peerId)) {
+              silencePeerAudio(peerId);
+            }
+          });
         }
       } catch {
         // silent fallback
@@ -246,290 +471,338 @@ export default function App() {
     fetchPeers();
     const peerInterval = setInterval(fetchPeers, 1000);
     return () => clearInterval(peerInterval);
-  }, [selectedUser, inOffice, myPosition]);
+  }, [
+    selectedUser,
+    inOffice,
+    myPosition,
+    activeUsers,
+    currentOffice,
+    updateSpatialAudio,
+    silencePeerAudio,
+  ]);
 
   // Cleanup helper for WebRTC peer connection
-  const closePeerConnection = useCallback((peerUserId: string, reason: string) => {
-    const existing = activePeerConnectionsRef.current.get(peerUserId);
-    if (existing) {
-      existing.pc.close();
-      activePeerConnectionsRef.current.delete(peerUserId);
-      setPeerConnections((prev) => {
-        const next = { ...prev };
-        delete next[peerUserId];
-        return next;
-      });
-      addLog('warn', `WebRTC peer connection closed with ${peerUserId} (${reason})`);
-    }
-  }, [addLog]);
+  const closePeerConnection = useCallback(
+    (peerUserId: string, reason: string) => {
+      const existing = activePeerConnectionsRef.current.get(peerUserId);
+      if (existing) {
+        existing.pc.close();
+        activePeerConnectionsRef.current.delete(peerUserId);
+        setPeerConnections((prev) => {
+          const next = { ...prev };
+          delete next[peerUserId];
+          return next;
+        });
+        silencePeerAudio(peerUserId);
+        addLog('warn', `WebRTC peer connection closed with ${peerUserId} (${reason})`);
+      }
+    },
+    [addLog, silencePeerAudio]
+  );
 
   // Connect or switch active socket
-  const handleConnect = useCallback((account: DemoAccount) => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-    }
+  const handleConnect = useCallback(
+    (account: DemoAccount) => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
 
-    activePeerConnectionsRef.current.forEach(({ pc }) => pc.close());
-    activePeerConnectionsRef.current.clear();
-    setPeerConnections({});
-
-    addLog('info', `Connecting socket as ${account.user.displayName} (${account.simpleToken})...`);
-
-    const s: TypedClientSocket = ClientSocket({
-      auth: { token: account.simpleToken },
-      transports: ['websocket', 'polling'],
-    });
-
-    s.on('connect', () => {
-      setConnected(true);
-      setLastError(null);
-      addLog('success', `Socket connected [id: ${s.id}] for ${account.user.displayName}`);
-    });
-
-    s.on('connect_error', (err) => {
-      setConnected(false);
-      setLastError(err.message);
-      addLog('error', `Connection error: ${err.message}`);
-    });
-
-    s.on('disconnect', () => {
-      setConnected(false);
-      setInOffice(false);
       activePeerConnectionsRef.current.forEach(({ pc }) => pc.close());
       activePeerConnectionsRef.current.clear();
       setPeerConnections({});
-      addLog('warn', 'Socket disconnected');
-    });
 
-    s.on('presence:joined', (data) => {
-      addLog('info', `Member joined office: ${data.member.user.displayName} at (${data.member.position.x}, ${data.member.position.y})`);
-      setActiveUsers((prev) => {
-        const filtered = prev.filter((p) => p.userId !== data.member.userId);
-        return [...filtered, data.member];
-      });
-    });
+      addLog('info', `Connecting socket as ${account.user.displayName} (${account.simpleToken})...`);
 
-    s.on('presence:left', (data) => {
-      addLog('warn', `User left office: ${data.userId} (${data.reason || 'left'})`);
-      setActiveUsers((prev) => prev.filter((p) => p.userId !== data.userId));
-      closePeerConnection(data.userId, 'user left office');
-    });
-
-    s.on('avatar:moved', (data) => {
-      setActiveUsers((prev) =>
-        prev.map((u) => (u.userId === data.userId ? { ...u, position: data.position } : u))
-      );
-    });
-
-    s.on('avatar:move_rejected', (data) => {
-      addLog('error', `Movement rejected: ${data.reason} (${data.code})`);
-      setMyPosition(data.currentPosition);
-    });
-
-    // Office layout update event (Person 4)
-    s.on('office:layout_updated' as any, (data: any) => {
-      addLog('info', `[Office Layout Updated] New version #${data.layout.layoutVersion} broadcast received.`);
-      setCurrentOffice((prev) => (prev ? { ...prev, ...data.layout } : data.layout));
-    });
-
-    // WebRTC Signaling Handlers (Person 3)
-    s.on('signal:peer_eligible', async (data: PeerEligibleEvent) => {
-      addLog('info', `[WebRTC Signaling] Peer eligible: ${data.peerUserId} (negId: ${data.negotiationId.slice(-8)}, initiate: ${data.shouldInitiate})`);
-
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      activePeerConnectionsRef.current.set(data.peerUserId, {
-        pc,
-        negotiationId: data.negotiationId,
-        isPolite: data.isPolite,
+      const s: TypedClientSocket = ClientSocket({
+        auth: { token: account.simpleToken },
+        transports: ['websocket', 'polling'],
       });
 
-      setPeerConnections((prev) => ({
-        ...prev,
-        [data.peerUserId]: {
-          peerUserId: data.peerUserId,
+      s.on('connect', () => {
+        setConnected(true);
+        setLastError(null);
+        addLog('success', `Socket connected [id: ${s.id}] for ${account.user.displayName}`);
+      });
+
+      s.on('connect_error', (err) => {
+        setConnected(false);
+        setLastError(err.message);
+        addLog('error', `Connection error: ${err.message}`);
+      });
+
+      s.on('disconnect', () => {
+        setConnected(false);
+        setInOffice(false);
+        activePeerConnectionsRef.current.forEach(({ pc }) => pc.close());
+        activePeerConnectionsRef.current.clear();
+        setPeerConnections({});
+        addLog('warn', 'Socket disconnected');
+      });
+
+      s.on('presence:joined', (data) => {
+        addLog(
+          'info',
+          `Member joined office: ${data.member.user.displayName} at (${data.member.position.x}, ${data.member.position.y})`
+        );
+        setActiveUsers((prev) => {
+          const filtered = prev.filter((p) => p.userId !== data.member.userId);
+          return [...filtered, data.member];
+        });
+      });
+
+      s.on('presence:left', (data) => {
+        addLog('warn', `User left office: ${data.userId} (${data.reason || 'left'})`);
+        setActiveUsers((prev) => prev.filter((p) => p.userId !== data.userId));
+        closePeerConnection(data.userId, 'user left office');
+      });
+
+      s.on('avatar:moved', (data) => {
+        setActiveUsers((prev) =>
+          prev.map((u) => (u.userId === data.userId ? { ...u, position: data.position } : u))
+        );
+      });
+
+      s.on('avatar:move_rejected', (data) => {
+        addLog('error', `Movement rejected: ${data.reason} (${data.code})`);
+        setMyPosition(data.currentPosition);
+      });
+
+      // Office layout update event (Person 4)
+      s.on('office:layout_updated' as any, (data: any) => {
+        addLog(
+          'info',
+          `[Office Layout Updated] New version #${data.layout.layoutVersion} broadcast received.`
+        );
+        setCurrentOffice((prev) => (prev ? { ...prev, ...data.layout } : data.layout));
+      });
+
+      // WebRTC Signaling Handlers (Person 3)
+      s.on('signal:peer_eligible', async (data: PeerEligibleEvent) => {
+        addLog(
+          'info',
+          `[WebRTC Signaling] Peer eligible: ${data.peerUserId} (negId: ${data.negotiationId.slice(-8)}, initiate: ${data.shouldInitiate}, polite: ${data.isPolite})`
+        );
+
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        activePeerConnectionsRef.current.set(data.peerUserId, {
+          pc,
           negotiationId: data.negotiationId,
-          connectionState: pc.connectionState,
-          iceConnectionState: pc.iceConnectionState,
-          isOfferer: data.shouldInitiate,
-          hasAudio: false,
-        },
-      }));
+          isPolite: data.isPolite,
+        });
 
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current!));
-      }
-
-      pc.ontrack = (event) => {
-        addLog('success', `Received audio stream from peer ${data.peerUserId}`);
-        const remoteAudio = new Audio();
-        remoteAudio.srcObject = event.streams[0];
-        remoteAudio.play().catch(() => {});
         setPeerConnections((prev) => ({
           ...prev,
-          [data.peerUserId]: { ...prev[data.peerUserId], hasAudio: true },
-        }));
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          s.emit('signal:ice', {
-            targetUserId: data.peerUserId,
+          [data.peerUserId]: {
+            peerUserId: data.peerUserId,
             negotiationId: data.negotiationId,
-            candidate: event.candidate.toJSON(),
-          });
+            connectionState: pc.connectionState,
+            iceConnectionState: pc.iceConnectionState,
+            isOfferer: data.shouldInitiate,
+            hasAudio: false,
+          },
+        }));
+
+        if (localStreamRef.current) {
+          localStreamRef.current
+            .getTracks()
+            .forEach((track) => pc.addTrack(track, localStreamRef.current!));
         }
-      };
 
-      pc.onconnectionstatechange = () => {
-        setPeerConnections((prev) => {
-          if (!prev[data.peerUserId]) return prev;
-          return {
+        pc.ontrack = (event) => {
+          addLog('success', `Received audio stream from peer ${data.peerUserId}`);
+          const remoteAudio = new Audio();
+          remoteAudio.srcObject = event.streams[0];
+          remoteAudio.play().catch(() => {});
+          setPeerConnections((prev) => ({
             ...prev,
-            [data.peerUserId]: {
-              ...prev[data.peerUserId],
-              connectionState: pc.connectionState,
-              iceConnectionState: pc.iceConnectionState,
-            },
-          };
-        });
-      };
+            [data.peerUserId]: { ...prev[data.peerUserId], hasAudio: true },
+          }));
+        };
 
-      if (data.shouldInitiate) {
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          s.emit(
-            'signal:offer',
-            {
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            s.emit('signal:ice', {
               targetUserId: data.peerUserId,
               negotiationId: data.negotiationId,
-              sdp: { type: offer.type, sdp: offer.sdp },
+              candidate: event.candidate.toJSON(),
+            });
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          setPeerConnections((prev) => {
+            if (!prev[data.peerUserId]) return prev;
+            return {
+              ...prev,
+              [data.peerUserId]: {
+                ...prev[data.peerUserId],
+                connectionState: pc.connectionState,
+                iceConnectionState: pc.iceConnectionState,
+              },
+            };
+          });
+        };
+
+        if (data.shouldInitiate) {
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            s.emit(
+              'signal:offer',
+              {
+                targetUserId: data.peerUserId,
+                negotiationId: data.negotiationId,
+                sdp: { type: offer.type, sdp: offer.sdp },
+              },
+              (res) => {
+                if (!res.success) {
+                  addLog('error', `Failed to send offer to ${data.peerUserId}: ${res.error}`);
+                } else {
+                  addLog('info', `Sent SDP offer to ${data.peerUserId}`);
+                }
+              }
+            );
+          } catch (err) {
+            addLog('error', `Error creating offer: ${(err as Error).message}`);
+          }
+        }
+      });
+
+      s.on('signal:offer', async (data: InboundOfferEvent) => {
+        addLog('info', `[WebRTC Signaling] Received SDP offer from ${data.senderUserId}`);
+        let entry = activePeerConnectionsRef.current.get(data.senderUserId);
+
+        if (!entry) {
+          const pc = new RTCPeerConnection(RTC_CONFIG);
+          entry = { pc, negotiationId: data.negotiationId, isPolite: data.isPolite };
+          activePeerConnectionsRef.current.set(data.senderUserId, entry);
+        }
+
+        const { pc } = entry;
+
+        try {
+          if (pc.signalingState !== 'stable') {
+            if (data.isPolite) {
+              await pc.setLocalDescription({ type: 'rollback' });
+            } else {
+              addLog('warn', `Offer collision: impolite peer maintaining state`);
+            }
+          }
+
+          await pc.setRemoteDescription(
+            new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit)
+          );
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          s.emit(
+            'signal:answer',
+            {
+              targetUserId: data.senderUserId,
+              negotiationId: data.negotiationId,
+              sdp: { type: answer.type, sdp: answer.sdp },
             },
             (res) => {
               if (!res.success) {
-                addLog('error', `Failed to send offer to ${data.peerUserId}: ${res.error}`);
+                addLog('error', `Failed to send answer to ${data.senderUserId}: ${res.error}`);
               } else {
-                addLog('info', `Sent SDP offer to ${data.peerUserId}`);
+                addLog('info', `Sent SDP answer to ${data.senderUserId}`);
               }
             }
           );
         } catch (err) {
-          addLog('error', `Error creating offer: ${(err as Error).message}`);
+          addLog(
+            'error',
+            `Error processing offer from ${data.senderUserId}: ${(err as Error).message}`
+          );
         }
-      }
-    });
+      });
 
-    s.on('signal:offer', async (data: InboundOfferEvent) => {
-      addLog('info', `[WebRTC Signaling] Received SDP offer from ${data.senderUserId}`);
-      let entry = activePeerConnectionsRef.current.get(data.senderUserId);
-
-      if (!entry) {
-        const pc = new RTCPeerConnection(RTC_CONFIG);
-        entry = { pc, negotiationId: data.negotiationId, isPolite: data.isPolite };
-        activePeerConnectionsRef.current.set(data.senderUserId, entry);
-      }
-
-      const { pc } = entry;
-
-      try {
-        if (pc.signalingState !== 'stable') {
-          if (data.isPolite) {
-            await pc.setLocalDescription({ type: 'rollback' });
-          } else {
-            addLog('warn', `Offer collision: impolite peer maintaining state`);
+      s.on('signal:answer', async (data: InboundAnswerEvent) => {
+        addLog('info', `[WebRTC Signaling] Received SDP answer from ${data.senderUserId}`);
+        const entry = activePeerConnectionsRef.current.get(data.senderUserId);
+        if (entry) {
+          try {
+            await entry.pc.setRemoteDescription(
+              new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit)
+            );
+            addLog('success', `Established signaling session with ${data.senderUserId}`);
+          } catch (err) {
+            addLog('error', `Error setting remote answer: ${(err as Error).message}`);
           }
         }
+      });
 
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        s.emit(
-          'signal:answer',
-          {
-            targetUserId: data.senderUserId,
-            negotiationId: data.negotiationId,
-            sdp: { type: answer.type, sdp: answer.sdp },
-          },
-          (res) => {
-            if (!res.success) {
-              addLog('error', `Failed to send answer to ${data.senderUserId}: ${res.error}`);
-            } else {
-              addLog('info', `Sent SDP answer to ${data.senderUserId}`);
-            }
+      s.on('signal:ice', async (data: InboundIceEvent) => {
+        const entry = activePeerConnectionsRef.current.get(data.senderUserId);
+        if (entry) {
+          try {
+            await entry.pc.addIceCandidate(
+              new RTCIceCandidate(data.candidate as RTCIceCandidateInit)
+            );
+          } catch {
+            // ignore
           }
-        );
-      } catch (err) {
-        addLog('error', `Error processing offer from ${data.senderUserId}: ${(err as Error).message}`);
-      }
-    });
-
-    s.on('signal:answer', async (data: InboundAnswerEvent) => {
-      addLog('info', `[WebRTC Signaling] Received SDP answer from ${data.senderUserId}`);
-      const entry = activePeerConnectionsRef.current.get(data.senderUserId);
-      if (entry) {
-        try {
-          await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
-          addLog('success', `Established signaling session with ${data.senderUserId}`);
-        } catch (err) {
-          addLog('error', `Error setting remote answer: ${(err as Error).message}`);
         }
-      }
-    });
+      });
 
-    s.on('signal:ice', async (data: InboundIceEvent) => {
-      const entry = activePeerConnectionsRef.current.get(data.senderUserId);
-      if (entry) {
-        try {
-          await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate as RTCIceCandidateInit));
-        } catch {
-          // ignore
-        }
-      }
-    });
+      s.on('signal:peer_ineligible', (data: PeerIneligibleEvent) => {
+        closePeerConnection(data.peerUserId, data.reason);
+      });
 
-    s.on('signal:peer_ineligible', (data: PeerIneligibleEvent) => {
-      closePeerConnection(data.peerUserId, data.reason);
-    });
-
-    socketRef.current = s;
-  }, [addLog, closePeerConnection]);
+      socketRef.current = s;
+    },
+    [addLog, closePeerConnection]
+  );
 
   // Join designated office
-  const handleJoinOffice = useCallback((officeId: string) => {
-    if (!socketRef.current || !connected) {
-      addLog('warn', 'Socket not connected. Connect user first.');
-      return;
-    }
+  const handleJoinOffice = useCallback(
+    (officeId: string) => {
+      if (!socketRef.current || !connected) {
+        addLog('warn', 'Socket not connected. Connect user first.');
+        return;
+      }
 
-    refreshOfficeLayout(officeId);
-    addLog('info', `Requesting entry to office '${officeId}'...`);
+      refreshOfficeLayout(officeId);
+      addLog('info', `Requesting entry to office '${officeId}'...`);
 
-    socketRef.current.emit(
-      'office:join',
-      { officeId },
-      (response: { success: boolean; error?: string; code?: string; snapshot?: PresenceSnapshot }) => {
-        if (!response.success) {
-          setLastError(response.error || 'Failed to enter office');
-          addLog('error', `Access Denied: ${response.error} [${response.code}]`);
-          return;
-        }
+      socketRef.current.emit(
+        'office:join',
+        { officeId },
+        (response: {
+          success: boolean;
+          error?: string;
+          code?: string;
+          snapshot?: PresenceSnapshot;
+        }) => {
+          if (!response.success) {
+            setLastError(response.error || 'Failed to enter office');
+            addLog('error', `Access Denied: ${response.error} [${response.code}]`);
+            return;
+          }
 
-        setInOffice(true);
-        setLastError(null);
-        addLog('success', `Joined office '${officeId}'. Initial snapshot received (${response.snapshot?.members.length ?? 0} active).`);
+          setInOffice(true);
+          setLastError(null);
+          addLog(
+            'success',
+            `Joined office '${officeId}'. Initial snapshot received (${response.snapshot?.members.length ?? 0} active).`
+          );
 
-        if (response.snapshot) {
-          setActiveUsers(response.snapshot.members);
-          const self = response.snapshot.members.find((m) => m.userId === selectedUser?.user.id);
-          if (self) {
-            setMyPosition(self.position);
-            sequenceRef.current = self.position.sequence + 1;
+          if (response.snapshot) {
+            setActiveUsers(response.snapshot.members);
+            const self = response.snapshot.members.find(
+              (m) => m.userId === selectedUser?.user.id
+            );
+            if (self) {
+              setMyPosition(self.position);
+              sequenceRef.current = self.position.sequence + 1;
+            }
           }
         }
-      }
-    );
-  }, [connected, refreshOfficeLayout, selectedUser, addLog]);
+      );
+    },
+    [connected, refreshOfficeLayout, selectedUser, addLog]
+  );
 
   const handleLeaveOffice = useCallback(() => {
     if (!socketRef.current || !selectedOfficeId) return;
@@ -545,36 +818,42 @@ export default function App() {
   }, [selectedOfficeId, addLog]);
 
   // Send movement update
-  const sendMove = useCallback((targetX: number, targetY: number, label?: string) => {
-    if (!socketRef.current || !inOffice) return;
+  const sendMove = useCallback(
+    (targetX: number, targetY: number, label?: string) => {
+      if (!socketRef.current || !inOffice) return;
 
-    const nextSeq = sequenceRef.current++;
-    const now = Date.now();
+      const nextSeq = sequenceRef.current++;
+      const now = Date.now();
 
-    socketRef.current.emit(
-      'avatar:move',
-      {
-        officeId: selectedOfficeId,
-        x: targetX,
-        y: targetY,
-        sequence: nextSeq,
-        timestamp: now,
-      },
-      (res) => {
-        if (res && !res.success) {
-          addLog('error', `Move to (${targetX}, ${targetY}) rejected: ${res.error}`);
-          if (res.position) {
+      socketRef.current.emit(
+        'avatar:move',
+        {
+          officeId: selectedOfficeId,
+          x: targetX,
+          y: targetY,
+          sequence: nextSeq,
+          timestamp: now,
+        },
+        (res) => {
+          if (res && !res.success) {
+            addLog('error', `Move to (${targetX}, ${targetY}) rejected: ${res.error}`);
+            if (res.position) {
+              setMyPosition(res.position);
+            }
+          } else if (res && res.position) {
             setMyPosition(res.position);
-          }
-        } else if (res && res.position) {
-          setMyPosition(res.position);
-          if (label) {
-            addLog('info', `Moved ${label} to (${res.position.x}, ${res.position.y}) seq: ${res.position.sequence}`);
+            if (label) {
+              addLog(
+                'info',
+                `Moved ${label} to (${res.position.x}, ${res.position.y}) seq: ${res.position.sequence}`
+              );
+            }
           }
         }
-      }
-    );
-  }, [inOffice, selectedOfficeId, addLog]);
+      );
+    },
+    [inOffice, selectedOfficeId, addLog]
+  );
 
   // Handle click on canvas
   const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -617,92 +896,173 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [inOffice, myPosition, sendMove]);
 
-  // Secondary client (Bob) simulation
-  const toggleSimBob = () => {
-    if (simBobActive) {
-      if (simBobSocketRef.current) {
-        simBobSocketRef.current.disconnect();
-        simBobSocketRef.current = null;
-      }
-      if (simBobPcRef.current) {
-        simBobPcRef.current.close();
-        simBobPcRef.current = null;
-      }
-      setSimBobActive(false);
-      addLog('warn', 'Simulated Bob disconnected.');
-    } else {
-      const bobSocket: TypedClientSocket = ClientSocket({
-        auth: { token: 'token-bob' },
-        transports: ['websocket'],
-      });
+  // Automated Simulated Multi-Peer Bot Control
+  const toggleBot = useCallback(
+    (bot: SimulatedBot) => {
+      const isCurrentlyActive = bot.active;
+      const botKey = bot.userId;
 
-      bobSocket.on('connect', () => {
-        addLog('success', 'Simulated Bob socket connected.');
-        bobSocket.emit(
-          'office:join',
-          { officeId: selectedOfficeId, initialPosition: { x: 260, y: 240 } },
+      if (isCurrentlyActive) {
+        // Disconnect bot
+        const sock = botSocketsRef.current.get(botKey);
+        if (sock) {
+          sock.disconnect();
+          botSocketsRef.current.delete(botKey);
+        }
+        const pc = botPcsRef.current.get(botKey);
+        if (pc) {
+          pc.close();
+          botPcsRef.current.delete(botKey);
+        }
+        setSimBots((prev) =>
+          prev.map((b) => (b.userId === bot.userId ? { ...b, active: false, patrolActive: false } : b))
+        );
+        addLog('warn', `Simulated bot ${bot.displayName} disconnected.`);
+      } else {
+        // Connect bot via real socket
+        addLog('info', `Spawning simulated peer ${bot.displayName} [${bot.token}]...`);
+        const sock: TypedClientSocket = ClientSocket({
+          auth: { token: bot.token },
+          transports: ['websocket'],
+        });
+
+        sock.on('connect', () => {
+          sock.emit(
+            'office:join',
+            { officeId: selectedOfficeId, initialPosition: bot.position },
+            (res) => {
+              if (res.success) {
+                addLog('success', `Bot ${bot.displayName} entered ${selectedOfficeId} at (${bot.position.x}, ${bot.position.y})`);
+                setSimBots((prev) =>
+                  prev.map((b) => (b.userId === bot.userId ? { ...b, active: true } : b))
+                );
+              } else {
+                addLog('error', `Bot ${bot.displayName} failed to enter: ${res.error}`);
+              }
+            }
+          );
+        });
+
+        sock.on('signal:offer', async (data: InboundOfferEvent) => {
+          addLog('info', `Bot ${bot.displayName} received offer from ${data.senderUserId}; returning answer...`);
+          const pc = new RTCPeerConnection(RTC_CONFIG);
+          botPcsRef.current.set(botKey, pc);
+
+          pc.onicecandidate = (evt) => {
+            if (evt.candidate) {
+              sock.emit('signal:ice', {
+                targetUserId: data.senderUserId,
+                negotiationId: data.negotiationId,
+                candidate: evt.candidate.toJSON(),
+              });
+            }
+          };
+
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+            const ans = await pc.createAnswer();
+            await pc.setLocalDescription(ans);
+            sock.emit('signal:answer', {
+              targetUserId: data.senderUserId,
+              negotiationId: data.negotiationId,
+              sdp: { type: ans.type, sdp: ans.sdp },
+            });
+            addLog('success', `Bot ${bot.displayName} answered WebRTC offer.`);
+          } catch (e) {
+            addLog('error', `Bot ${bot.displayName} failed answer: ${(e as Error).message}`);
+          }
+        });
+
+        sock.on('signal:ice', async (data: InboundIceEvent) => {
+          const pc = botPcsRef.current.get(botKey);
+          if (pc) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate as RTCIceCandidateInit));
+            } catch {
+              // ignore
+            }
+          }
+        });
+
+        sock.on('signal:peer_ineligible', () => {
+          const pc = botPcsRef.current.get(botKey);
+          if (pc) {
+            pc.close();
+            botPcsRef.current.delete(botKey);
+            addLog('info', `Bot ${bot.displayName} teardown WebRTC link.`);
+          }
+        });
+
+        botSocketsRef.current.set(botKey, sock);
+      }
+    },
+    [selectedOfficeId, addLog]
+  );
+
+  // Toggle Bot Patrol Mode
+  const toggleBotPatrol = useCallback((userId: string) => {
+    setSimBots((prev) =>
+      prev.map((b) => (b.userId === userId ? { ...b, patrolActive: !b.patrolActive } : b))
+    );
+  }, []);
+
+  // Bot patrol movement ticker
+  useEffect(() => {
+    const patrolInterval = setInterval(() => {
+      simBots.forEach((bot) => {
+        if (!bot.active || !bot.patrolActive) return;
+        const sock = botSocketsRef.current.get(bot.userId);
+        if (!sock) return;
+
+        const currentTarget = bot.waypoints[bot.currentWaypointIndex];
+        const dx = currentTarget.x - bot.position.x;
+        const dy = currentTarget.y - bot.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        let nextX = bot.position.x;
+        let nextY = bot.position.y;
+        let nextIndex = bot.currentWaypointIndex;
+
+        if (dist < 15) {
+          nextIndex = (bot.currentWaypointIndex + 1) % bot.waypoints.length;
+        } else {
+          const step = 15;
+          nextX = Math.round(bot.position.x + (dx / dist) * step);
+          nextY = Math.round(bot.position.y + (dy / dist) * step);
+        }
+
+        sock.emit(
+          'avatar:move',
+          {
+            officeId: selectedOfficeId,
+            x: nextX,
+            y: nextY,
+            sequence: Date.now() % 100000,
+            timestamp: Date.now(),
+          },
           (res) => {
-            if (res.success) {
-              addLog('info', 'Simulated Bob joined office at (260, 240).');
-              setSimBobActive(true);
+            if (res.success && res.position) {
+              setSimBots((prev) =>
+                prev.map((b) =>
+                  b.userId === bot.userId
+                    ? {
+                        ...b,
+                        position: { x: res.position!.x, y: res.position!.y },
+                        currentWaypointIndex: nextIndex,
+                      }
+                    : b
+                )
+              );
             }
           }
         );
       });
+    }, 450);
 
-      bobSocket.on('signal:offer', async (data: InboundOfferEvent) => {
-        addLog('info', `Simulated Bob received offer from ${data.senderUserId}; generating answer...`);
-        const bobPc = new RTCPeerConnection(RTC_CONFIG);
-        simBobPcRef.current = bobPc;
+    return () => clearInterval(patrolInterval);
+  }, [simBots, selectedOfficeId]);
 
-        bobPc.onicecandidate = (evt) => {
-          if (evt.candidate) {
-            bobSocket.emit('signal:ice', {
-              targetUserId: data.senderUserId,
-              negotiationId: data.negotiationId,
-              candidate: evt.candidate.toJSON(),
-            });
-          }
-        };
-
-        try {
-          await bobPc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
-          const ans = await bobPc.createAnswer();
-          await bobPc.setLocalDescription(ans);
-          bobSocket.emit('signal:answer', {
-            targetUserId: data.senderUserId,
-            negotiationId: data.negotiationId,
-            sdp: { type: ans.type, sdp: ans.sdp },
-          });
-          addLog('success', `Simulated Bob answered WebRTC offer from ${data.senderUserId}`);
-        } catch (e) {
-          addLog('error', `Bob failed to answer offer: ${(e as Error).message}`);
-        }
-      });
-
-      bobSocket.on('signal:ice', async (data: InboundIceEvent) => {
-        if (simBobPcRef.current) {
-          try {
-            await simBobPcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate as RTCIceCandidateInit));
-          } catch {
-            // ignore
-          }
-        }
-      });
-
-      bobSocket.on('signal:peer_ineligible', () => {
-        if (simBobPcRef.current) {
-          simBobPcRef.current.close();
-          simBobPcRef.current = null;
-          addLog('info', 'Simulated Bob closed peer connection.');
-        }
-      });
-
-      simBobSocketRef.current = bobSocket;
-    }
-  };
-
-  // Test layout update as Admin (Alice)
+  // Test layout update as Admin (Alice / Maya)
   const handleAdminUpdateLayout = async () => {
     if (!selectedUser) return;
     try {
@@ -717,14 +1077,14 @@ export default function App() {
           obstacles: [
             ...(currentOffice?.obstacles || []),
             {
-              id: `wall-added-${Date.now()}`,
-              name: 'Added Soundproof Partition',
+              id: `partition-wall-${Date.now()}`,
+              name: 'Modular Acoustic Partition',
               shape: 'wall',
-              x1: 600,
-              y1: 150,
-              x2: 600,
-              y2: 450,
-              thickness: 10,
+              x1: 580,
+              y1: 120,
+              x2: 580,
+              y2: 440,
+              thickness: 12,
               blocksMovement: true,
               blocksSound: true,
               attenuation: 0,
@@ -735,7 +1095,10 @@ export default function App() {
 
       const data = await res.json();
       if (res.ok) {
-        addLog('success', `Layout updated successfully by ${selectedUser.user.displayName}! Version: #${data.layout.layoutVersion}`);
+        addLog(
+          'success',
+          `Layout updated successfully by ${selectedUser.user.displayName}! Version: #${data.layout.layoutVersion}`
+        );
         setCurrentOffice(data.layout);
       } else {
         addLog('error', `Layout update failed (${res.status}): ${data.error}`);
@@ -748,145 +1111,229 @@ export default function App() {
   const maxX = currentOffice?.bounds?.maxX || currentOffice?.width || 1200;
   const maxY = currentOffice?.bounds?.maxY || currentOffice?.height || 800;
 
+  // Filter accounts by department
+  const filteredAccounts = demoAccounts.filter((acc) => {
+    if (departmentFilter === 'all') return true;
+    if (departmentFilter === 'engineering') {
+      return ['user-alice', 'user-bob', 'user-liam', 'user-marcus'].includes(acc.user.id);
+    }
+    if (departmentFilter === 'product') {
+      return ['user-charlie', 'user-maya', 'user-zara'].includes(acc.user.id);
+    }
+    if (departmentFilter === 'research') {
+      return ['user-elena', 'user-bob'].includes(acc.user.id);
+    }
+    if (departmentFilter === 'bots') {
+      return ['user-dexter', 'user-eve'].includes(acc.user.id);
+    }
+    return true;
+  });
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Header bar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
+      {/* Top Header Navigation */}
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold shadow-lg shadow-indigo-500/20 text-white">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-bold shadow-lg shadow-indigo-500/25 text-white">
             <Radio className="h-5 w-5 animate-pulse" />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-white">ProxiSpeak</h1>
-              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                P1: Foundation
+              <span className="px-2 py-0.5 text-[11px] font-semibold rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                P1: Presence
               </span>
-              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                P2: Proximity
+              <span className="px-2 py-0.5 text-[11px] font-semibold rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                P2: Geospatial 100px
               </span>
-              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              <span className="px-2 py-0.5 text-[11px] font-semibold rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
                 P3: WebRTC
               </span>
-              <span className="px-2 py-0.5 text-xs font-semibold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
-                <Building className="h-3 w-3" /> P4: Persistence & Geometry
+              <span className="px-2 py-0.5 text-[11px] font-semibold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                <Building className="h-3 w-3" /> P4: Occlusion
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Persistent Office Layouts • Sound Obstacle Occlusion • Redis Multi-Instance Adapter • Master Integration QA
+              MongoDB 2D Flat Index • 100px Entry / 110px Exit Hysteresis • Soundproof Raycast Occlusion • Perfect Negotiation
             </p>
           </div>
         </div>
 
-        {/* Server & Audio Health Metrics */}
-        <div className="flex items-center gap-3 text-xs">
+        {/* Server Status & Controls */}
+        <div className="flex items-center gap-2.5 text-xs">
+          <button
+            onClick={() => setSpatialAudioEnabled(!spatialAudioEnabled)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium transition ${
+              spatialAudioEnabled
+                ? 'bg-purple-600/20 border-purple-500/40 text-purple-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400'
+            }`}
+            title="Toggle Web Audio spatial synthesizer tone simulation"
+          >
+            <Headphones className="h-3.5 w-3.5" />
+            <span>Spatial Audio {spatialAudioEnabled ? 'ON' : 'OFF'}</span>
+          </button>
+
           <button
             onClick={toggleMicrophone}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border font-semibold transition ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium transition ${
               micActive
-                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-600/30'
+                ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
             }`}
           >
-            {micActive ? <Mic className="h-4 w-4 text-emerald-400" /> : <MicOff className="h-4 w-4 text-slate-400" />}
-            <span>{micActive ? 'Microphone Active' : 'Enable Audio/Mic'}</span>
+            {micActive ? <Mic className="h-3.5 w-3.5 text-emerald-400" /> : <MicOff className="h-3.5 w-3.5 text-slate-400" />}
+            <span>{micActive ? 'Mic Active' : 'Enable Mic'}</span>
           </button>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
-            <ServerIcon className="h-4 w-4 text-emerald-400" />
-            <span className="text-slate-400">Health:</span>
-            <span className="font-semibold text-emerald-400">
-              {healthStatus?.status === 'ok' ? 'Online' : 'Checking...'}
-            </span>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 font-mono">
+            <ServerIcon className="h-3.5 w-3.5 text-emerald-400" />
+            <span className="text-slate-400">API:</span>
+            <span className="text-emerald-400 font-semibold">{healthStatus?.status === 'ok' ? 'Online' : 'Checking'}</span>
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700">
-            <Activity className="h-4 w-4 text-indigo-400" />
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 font-mono">
+            <Activity className="h-3.5 w-3.5 text-indigo-400" />
             <span className="text-slate-400">Socket:</span>
             <span className={`font-semibold ${connected ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {connected ? 'Authenticated' : 'Disconnected'}
+              {connected ? 'Active' : 'Offline'}
             </span>
           </div>
         </div>
       </header>
 
-      {/* Main Workspace Layout */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 overflow-hidden">
-        {/* Left Column: Auth, Office Selector & Controls */}
-        <div className="space-y-6 lg:col-span-1">
-          {/* Identity & Authentication Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-indigo-400" />
-              1. Authenticated Account
-            </h2>
+      {/* Main Workspace 3-Column Layout */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 p-5 overflow-hidden">
+        {/* Left Column: Character Selection & Office Management (3 cols) */}
+        <div className="lg:col-span-3 space-y-5 overflow-y-auto max-h-[calc(100vh-100px)] pr-1">
+          {/* 1. Character Roster Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-indigo-400" />
+                1. Select Character Avatar
+              </h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 font-mono">
+                {demoAccounts.length} Available
+              </span>
+            </div>
 
-            <div className="space-y-2 mb-4">
-              {demoAccounts.map((acc) => {
+            {/* Department Filter Tabs */}
+            <div className="flex gap-1 mb-3 overflow-x-auto pb-1 text-[10px]">
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'engineering', label: 'Eng' },
+                { id: 'product', label: 'Design' },
+                { id: 'research', label: 'Research' },
+                { id: 'bots', label: 'Bots & Guests' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setDepartmentFilter(tab.id)}
+                  className={`px-2 py-1 rounded transition ${
+                    departmentFilter === tab.id
+                      ? 'bg-indigo-600 text-white font-semibold'
+                      : 'bg-slate-800/60 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Character Scroll List */}
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              {filteredAccounts.map((acc) => {
                 const isSelected = selectedUser?.user.id === acc.user.id;
-                const isAdmin = acc.user.id === 'user-alice';
+                const isAdmin = acc.user.id === 'user-alice' || acc.user.id === 'user-maya';
+                const userTheme = acc.user.themeColor || '#6366f1';
+
                 return (
-                  <button
+                  <div
                     key={acc.user.id}
                     onClick={() => {
                       setSelectedUser(acc);
                       if (connected) handleConnect(acc);
                     }}
-                    className={`w-full text-left p-2.5 rounded-lg border text-xs flex items-center justify-between transition ${
+                    className={`w-full text-left p-2 rounded-lg border text-xs cursor-pointer transition flex items-center justify-between ${
                       isSelected
-                        ? 'border-indigo-500 bg-indigo-500/10 text-white font-medium'
+                        ? 'border-indigo-500 bg-indigo-500/15 shadow-sm'
                         : 'border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <img
-                        src={acc.user.avatarUrl}
-                        alt={acc.user.displayName}
-                        className="h-7 w-7 rounded-full bg-slate-800 border border-slate-700"
-                      />
-                      <div>
-                        <div className="font-semibold flex items-center gap-1.5">
-                          {acc.user.displayName}
-                          {isAdmin && (
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                              Admin
+                      <div
+                        className="relative h-8 w-8 rounded-full border flex items-center justify-center overflow-hidden shrink-0"
+                        style={{ borderColor: userTheme }}
+                      >
+                        <img
+                          src={acc.user.avatarUrl}
+                          alt={acc.user.displayName}
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-100 flex items-center gap-1.5 truncate">
+                          <span>{acc.user.displayName}</span>
+                          {acc.user.badge && (
+                            <span
+                              className="text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-tight"
+                              style={{
+                                backgroundColor: `${userTheme}25`,
+                                color: userTheme,
+                                borderColor: `${userTheme}50`,
+                                borderWidth: '1px',
+                              }}
+                            >
+                              {acc.user.badge}
                             </span>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          {acc.simpleToken}
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {acc.user.roleTitle || acc.user.department || acc.simpleToken}
                         </div>
                       </div>
                     </div>
-                    {acc.user.id === 'user-eve' && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        Guest
+
+                    <div className="text-right shrink-0">
+                      <span className="text-[9px] font-mono text-slate-500">
+                        {acc.simpleToken.replace('token-', '')}
                       </span>
-                    )}
-                  </button>
+                    </div>
+                  </div>
                 );
               })}
             </div>
 
-            <button
-              onClick={() => selectedUser && handleConnect(selectedUser)}
-              className="w-full py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition flex items-center justify-center gap-2"
-            >
-              {connected ? 'Switch / Reconnect Socket' : 'Connect & Authenticate'}
-            </button>
+            {selectedUser && (
+              <div className="mt-3 pt-3 border-t border-slate-800/80">
+                <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2 font-mono">
+                  <span>Active Token:</span>
+                  <span className="text-indigo-400 font-semibold">{selectedUser.simpleToken}</span>
+                </div>
+                <button
+                  onClick={() => handleConnect(selectedUser)}
+                  className="w-full py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/20 transition flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  {connected ? 'Switch / Reconnect Socket' : 'Connect & Authenticate'}
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Office Selection & Layout Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2">
+            {/* 2. Office Selection & Persisted Layouts */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2.5 flex items-center gap-2">
               <Building className="h-4 w-4 text-amber-400" />
-              2. Persisted Office Layout
+              2. Persisted Virtual Offices
             </h2>
 
-            <div className="space-y-3 mb-4">
+            <div className="space-y-2 mb-3">
               {offices.map((off) => {
                 const isSelected = selectedOfficeId === off.id;
                 const isRestricted = off.accessPolicy === 'members_only';
+
                 return (
                   <div
                     key={off.id}
@@ -894,26 +1341,27 @@ export default function App() {
                       setSelectedOfficeId(off.id);
                       refreshOfficeLayout(off.id);
                     }}
-                    className={`p-3 rounded-lg border cursor-pointer transition ${
+                    className={`p-2.5 rounded-lg border cursor-pointer transition ${
                       isSelected
                         ? 'border-amber-500/60 bg-amber-500/10 text-white'
                         : 'border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-xs">{off.name}</span>
+                      <span className="font-semibold text-xs text-slate-200">{off.name}</span>
                       {isRestricted ? (
-                        <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                        <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
                           <Lock className="h-2.5 w-2.5" /> Restricted
                         </span>
                       ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                           Public
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-1 font-mono flex justify-between">
-                      <span>Bounds: {off.bounds?.maxX || off.width}x{off.bounds?.maxY || off.height}px</span>
+                    <div className="text-[10px] text-slate-400 line-clamp-1">{off.description}</div>
+                    <div className="text-[9px] text-slate-500 mt-1 font-mono flex justify-between">
+                      <span>Dimensions: {off.bounds?.maxX || off.width}x{off.bounds?.maxY || off.height}px</span>
                       <span className="text-amber-400">Version: #{off.layoutVersion || 1}</span>
                     </div>
                   </div>
@@ -927,110 +1375,179 @@ export default function App() {
                   onClick={handleLeaveOffice}
                   className="w-full py-2 px-3 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-semibold transition flex items-center justify-center gap-2"
                 >
-                  <LogOut className="h-3.5 w-3.5" /> Leave Office
+                  <LogOut className="h-3.5 w-3.5" /> Leave Office Room
                 </button>
 
                 <button
                   onClick={handleAdminUpdateLayout}
                   className="w-full py-2 px-3 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-xs font-semibold transition flex items-center justify-center gap-2"
                 >
-                  <Sliders className="h-3.5 w-3.5" /> Test Layout Update (PUT API)
+                  <Sliders className="h-3.5 w-3.5" /> Add Wall Partition (PUT API)
                 </button>
               </div>
             ) : (
               <button
                 onClick={() => handleJoinOffice(selectedOfficeId)}
                 disabled={!connected}
-                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shadow transition flex items-center justify-center gap-2"
+                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-2"
               >
                 <ArrowRight className="h-3.5 w-3.5" /> Enter Selected Office
               </button>
             )}
 
             {lastError && (
-              <div className="mt-3 p-2.5 rounded-lg bg-rose-950/50 border border-rose-800/80 text-rose-300 text-xs flex items-start gap-2">
+              <div className="mt-2.5 p-2 rounded-lg bg-rose-950/60 border border-rose-800/80 text-rose-300 text-xs flex items-start gap-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
                 <span>{lastError}</span>
               </div>
             )}
           </div>
 
-          {/* WebRTC Peer Simulator Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Zap className="h-4 w-4 text-purple-400" />
-              WebRTC Audio Simulator
-            </h2>
-            <button
-              onClick={toggleSimBob}
-              className={`w-full py-2 px-3 rounded-lg text-xs font-semibold border transition ${
-                simBobActive
-                  ? 'bg-purple-600/20 border-purple-500/40 text-purple-300 hover:bg-purple-600/30'
-                  : 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30'
-              }`}
-            >
-              {simBobActive ? 'Disconnect Bob WebRTC Peer' : 'Spawn Bob to Test Spatial Audio'}
-            </button>
+          {/* 3. Multi-Bot Simulator Engine */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Bot className="h-4 w-4 text-purple-400" />
+                3. Peer Bot Simulators
+              </h2>
+              <span className="text-[10px] text-slate-500 font-mono">Multi-Socket</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mb-3">
+              Spawn automated peers into this office to test proximity entry/exit hysteresis, audio signaling, and wall occlusion.
+            </p>
+
+            <div className="space-y-2.5">
+              {simBots.map((bot) => (
+                <div
+                  key={bot.userId}
+                  className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="h-3 w-3 rounded-full"
+                        style={{ backgroundColor: bot.color }}
+                      />
+                      <span className="text-xs font-semibold text-slate-200">{bot.displayName}</span>
+                      <span className="text-[9px] text-slate-500">({bot.roleTitle})</span>
+                    </div>
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
+                        bot.active
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      {bot.active ? 'Spawned' : 'Offline'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleBot(bot)}
+                      className={`flex-1 py-1 px-2 rounded text-[11px] font-semibold border transition ${
+                        bot.active
+                          ? 'bg-rose-600/20 border-rose-500/40 text-rose-300 hover:bg-rose-600/30'
+                          : 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30'
+                      }`}
+                    >
+                      {bot.active ? 'Despawn' : 'Spawn into Office'}
+                    </button>
+
+                    {bot.active && (
+                      <button
+                        onClick={() => toggleBotPatrol(bot.userId)}
+                        className={`py-1 px-2.5 rounded text-[11px] font-semibold border transition flex items-center gap-1 ${
+                          bot.patrolActive
+                            ? 'bg-amber-600/20 border-amber-500/40 text-amber-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Autonomous walking through proximity zone and behind walls"
+                      >
+                        {bot.patrolActive ? <Square className="h-3 w-3 text-amber-400" /> : <Play className="h-3 w-3 text-emerald-400" />}
+                        <span>Patrol</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Center Canvas: Live 2D Office with Obstacles & Sound Occlusion */}
-        <div className="lg:col-span-2 flex flex-col space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex-1 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+        {/* Center Column: Live 2D Spatial Office Canvas (6 cols) */}
+        <div className="lg:col-span-6 flex flex-col space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex-1 flex flex-col shadow-sm">
+            {/* Canvas Header */}
+            <div className="flex items-center justify-between mb-2.5">
               <div className="flex items-center gap-2">
                 <Move className="h-4 w-4 text-indigo-400" />
-                <h3 className="font-semibold text-sm text-slate-200">
+                <h3 className="font-bold text-sm text-slate-200">
                   {currentOffice ? currentOffice.name : 'Virtual Office Canvas'}
                 </h3>
               </div>
-              <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
+              <div className="flex items-center gap-3 text-xs font-mono">
                 {inOffice && (
                   <>
-                    <span>Position: ({myPosition.x}, {myPosition.y})</span>
-                    <span className="text-emerald-400">Online: {activeUsers.length}</span>
-                    <span className="text-amber-400">Version: #{currentOffice?.layoutVersion || 1}</span>
+                    <span className="text-slate-400">
+                      Pos: <strong className="text-white">({myPosition.x}, {myPosition.y})</strong>
+                    </span>
+                    <span className="text-emerald-400">
+                      Online: <strong>{activeUsers.length}</strong>
+                    </span>
+                    <span className="text-amber-400">
+                      Version: <strong>#{currentOffice?.layoutVersion || 1}</strong>
+                    </span>
                   </>
                 )}
               </div>
             </div>
 
-            {/* 2D Interactive Map */}
+            {/* 2D Interactive Map Container */}
             <div
               ref={mapCanvasRef}
               onClick={handleMapClick}
-              className="relative w-full aspect-[4/3] max-h-[520px] rounded-lg bg-slate-950 border-2 border-slate-800 cursor-crosshair overflow-hidden shadow-inner flex-1 select-none"
+              className="relative w-full aspect-[4/3] max-h-[560px] rounded-xl bg-slate-950 border-2 border-slate-800 cursor-crosshair overflow-hidden shadow-2xl flex-1 select-none"
               style={{
-                backgroundImage: 'radial-gradient(circle, #1e293b 1px, transparent 1px)',
-                backgroundSize: '24px 24px',
+                backgroundImage:
+                  'radial-gradient(circle, #334155 1.2px, transparent 1.2px), linear-gradient(to right, #0f172a 1px, transparent 1px), linear-gradient(to bottom, #0f172a 1px, transparent 1px)',
+                backgroundSize: '24px 24px, 120px 120px, 120px 120px',
               }}
             >
               {!inOffice && (
-                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center z-20">
-                  <Lock className="h-8 w-8 text-slate-600 mb-2" />
-                  <p className="text-sm font-medium text-slate-300">Office Room Not Active</p>
-                  <p className="text-xs text-slate-500 max-w-sm mt-1">
-                    Connect an authenticated socket and click &ldquo;Enter Selected Office&rdquo; to test real-time sound occlusion and movement.
+                <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center z-30">
+                  <div className="h-12 w-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mb-3 text-slate-500 shadow-inner">
+                    <Lock className="h-6 w-6 text-indigo-400" />
+                  </div>
+                  <p className="text-base font-semibold text-slate-200">Office Session Inactive</p>
+                  <p className="text-xs text-slate-400 max-w-sm mt-1 mb-4 leading-relaxed">
+                    Connect an authenticated character profile on the left and click &ldquo;Enter Selected Office&rdquo; to experience real-time spatial audio and server-validated movement.
                   </p>
+                  <button
+                    onClick={() => handleJoinOffice(selectedOfficeId)}
+                    disabled={!connected}
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow transition"
+                  >
+                    Enter Office Now
+                  </button>
                 </div>
               )}
 
-              {/* Render Obstacles / Walls / Furniture */}
+              {/* Render Obstacles / Walls / Desks */}
               {currentOffice?.obstacles.map((obs) => {
                 const isWall = obs.shape === 'wall' || ('x1' in obs && 'y1' in obs);
-                const isPoly = obs.shape === 'polygon' || 'points' in obs;
 
                 if (isWall) {
                   const w = obs as any;
                   const leftPct = (Math.min(w.x1, w.x2) / maxX) * 100;
                   const topPct = (Math.min(w.y1, w.y2) / maxY) * 100;
-                  const widthPct = (Math.max(Math.abs(w.x2 - w.x1), w.thickness || 8) / maxX) * 100;
-                  const heightPct = (Math.max(Math.abs(w.y2 - w.y1), w.thickness || 8) / maxY) * 100;
+                  const widthPct = (Math.max(Math.abs(w.x2 - w.x1), w.thickness || 10) / maxX) * 100;
+                  const heightPct = (Math.max(Math.abs(w.y2 - w.y1), w.thickness || 10) / maxY) * 100;
 
                   return (
                     <div
                       key={obs.id}
-                      className="absolute bg-rose-500/40 border-2 border-rose-400 rounded-sm shadow pointer-events-none"
+                      className="absolute bg-rose-600/50 border-2 border-rose-400 rounded shadow-lg pointer-events-none z-10 flex items-center justify-center"
                       style={{
                         left: `${leftPct}%`,
                         top: `${topPct}%`,
@@ -1038,14 +1555,14 @@ export default function App() {
                         height: `${heightPct}%`,
                       }}
                     >
-                      <span className="absolute -top-4 left-0 text-[9px] font-mono text-rose-300 whitespace-nowrap bg-slate-900/80 px-1 rounded">
-                        {obs.name} {obs.blocksSound ? '(Soundproof Wall)' : ''}
+                      <span className="text-[9px] font-mono text-rose-200 font-bold px-1 whitespace-nowrap bg-slate-950/80 rounded border border-rose-500/30">
+                        {obs.name} {obs.blocksSound ? '• Soundproof' : ''}
                       </span>
                     </div>
                   );
                 }
 
-                // Rectangle
+                // Rectangle furniture/room
                 const r = obs as any;
                 const leftPct = (r.x / maxX) * 100;
                 const topPct = (r.y / maxY) * 100;
@@ -1056,10 +1573,10 @@ export default function App() {
                 return (
                   <div
                     key={obs.id}
-                    className={`absolute rounded flex flex-col items-center justify-center p-1 shadow pointer-events-none border ${
+                    className={`absolute rounded-lg flex flex-col items-center justify-center p-1.5 shadow pointer-events-none border z-10 ${
                       isSoundproof
-                        ? 'bg-rose-950/50 border-rose-500/60'
-                        : 'bg-slate-800/60 border-slate-600/60'
+                        ? 'bg-rose-950/40 border-rose-500/70'
+                        : 'bg-slate-800/70 border-slate-700/80 backdrop-blur-xs'
                     }`}
                     style={{
                       left: `${leftPct}%`,
@@ -1072,17 +1589,20 @@ export default function App() {
                       {obs.name}
                     </span>
                     <span className="text-[9px] text-slate-400 font-mono">
-                      {obs.blocksSound ? `Blocks Sound (${(obs.attenuation ?? 0) * 100}% pass)` : 'Furniture'}
+                      {obs.blocksSound
+                        ? `Acoustic Partition (${Math.round((obs.attenuation ?? 0) * 100)}% transmission)`
+                        : 'Desk / Furniture'}
                     </span>
                   </div>
                 );
               })}
 
-              {/* Render Proximity Radius Circles */}
+              {/* Render Proximity Circles for Active User */}
               {inOffice && currentOffice && (
                 <>
+                  {/* Exit Radius Hysteresis: 110px */}
                   <div
-                    className="absolute rounded-full border border-dashed border-amber-400/40 pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                    className="absolute rounded-full border border-dashed border-amber-400/50 pointer-events-none -translate-x-1/2 -translate-y-1/2 transition-all duration-100"
                     style={{
                       left: `${(myPosition.x / maxX) * 100}%`,
                       top: `${(myPosition.y / maxY) * 100}%`,
@@ -1090,8 +1610,9 @@ export default function App() {
                       height: `${((proximityConfig.exitRadius * 2) / maxY) * 100}%`,
                     }}
                   />
+                  {/* Entry Radius: 100px */}
                   <div
-                    className="absolute rounded-full border-2 border-emerald-500/40 bg-emerald-500/5 pointer-events-none -translate-x-1/2 -translate-y-1/2 shadow-lg shadow-emerald-500/10"
+                    className="absolute rounded-full border-2 border-emerald-500/50 bg-emerald-500/5 pointer-events-none -translate-x-1/2 -translate-y-1/2 shadow-lg shadow-emerald-500/10 transition-all duration-100"
                     style={{
                       left: `${(myPosition.x / maxX) * 100}%`,
                       top: `${(myPosition.y / maxY) * 100}%`,
@@ -1102,21 +1623,61 @@ export default function App() {
                 </>
               )}
 
-              {/* Render Active Member Avatars */}
+              {/* Render Acoustic Occlusion Raycasts (SVG Layer) */}
+              {inOffice && currentOffice && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-15">
+                  {activeUsers
+                    .filter((u) => u.userId !== selectedUser?.user.id)
+                    .map((remoteUser) => {
+                      const peerInfo = proximityPeers.find((p) => p.userId === remoteUser.userId);
+                      if (!peerInfo) return null;
+
+                      const occlusion = clientGeometry.checkSoundObstruction(
+                        { x: myPosition.x, y: myPosition.y },
+                        { x: remoteUser.position.x, y: remoteUser.position.y },
+                        currentOffice.obstacles
+                      );
+
+                      const x1 = (myPosition.x / maxX) * 100;
+                      const y1 = (myPosition.y / maxY) * 100;
+                      const x2 = (remoteUser.position.x / maxX) * 100;
+                      const y2 = (remoteUser.position.y / maxY) * 100;
+
+                      return (
+                        <g key={`ray-${remoteUser.userId}`}>
+                          <line
+                            x1={`${x1}%`}
+                            y1={`${y1}%`}
+                            x2={`${x2}%`}
+                            y2={`${y2}%`}
+                            stroke={
+                              occlusion.isBlocked
+                                ? '#f43f5e'
+                                : occlusion.totalTransmission < 1
+                                ? '#eab308'
+                                : '#10b981'
+                            }
+                            strokeWidth={occlusion.isBlocked ? '2' : '2.5'}
+                            strokeDasharray={occlusion.isBlocked ? '4 4' : 'none'}
+                            strokeOpacity={occlusion.isBlocked ? '0.7' : '0.9'}
+                          />
+                        </g>
+                      );
+                    })}
+                </svg>
+              )}
+
+              {/* Render Avatars */}
               {inOffice &&
-                currentOffice &&
                 activeUsers.map((member) => {
                   const isMe = member.userId === selectedUser?.user.id;
-                  const pos = isMe ? myPosition : member.position;
-                  const leftPct = (pos.x / maxX) * 100;
-                  const topPct = (pos.y / maxY) * 100;
-
+                  const leftPct = (member.position.x / maxX) * 100;
+                  const topPct = (member.position.y / maxY) * 100;
                   const isPeer = proximityPeers.some((p) => p.userId === member.userId);
-                  const hasWebRtc = Boolean(peerConnections[member.userId]);
+                  const hasWebRtc = peerConnections[member.userId]?.connectionState === 'connected';
 
-                  // Check sound occlusion line of sight
                   let soundOcclusion: SoundOcclusionResult | null = null;
-                  if (!isMe && isPeer) {
+                  if (!isMe && isPeer && currentOffice) {
                     soundOcclusion = clientGeometry.checkSoundObstruction(
                       { x: myPosition.x, y: myPosition.y },
                       { x: member.position.x, y: member.position.y },
@@ -1124,42 +1685,57 @@ export default function App() {
                     );
                   }
 
+                  const avatarColor = member.user.themeColor || (isMe ? '#6366f1' : '#a855f7');
+
                   return (
                     <div
                       key={member.userId}
-                      className="absolute transition-all duration-150 ease-out -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none z-10"
+                      className="absolute transition-all duration-150 ease-out -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none z-20"
                       style={{
                         left: `${leftPct}%`,
                         top: `${topPct}%`,
                       }}
                     >
+                      {/* Avatar Ring */}
                       <div
-                        className={`h-8 w-8 rounded-full border-2 flex items-center justify-center shadow-lg transition-transform ${
+                        className={`h-9 w-9 rounded-full border-2 flex items-center justify-center shadow-xl transition-transform ${
                           isMe
-                            ? 'border-indigo-400 bg-indigo-600 shadow-indigo-500/50 scale-105'
-                            : hasWebRtc
+                            ? 'ring-4 ring-indigo-500/40 scale-110'
+                            : isPeer
                             ? soundOcclusion?.isBlocked
-                              ? 'border-rose-400 bg-rose-600 shadow-rose-500/60 ring-2 ring-rose-400/50'
-                              : 'border-purple-400 bg-purple-600 shadow-purple-500/60 ring-2 ring-purple-400/50'
-                            : 'border-slate-500 bg-slate-700 shadow-slate-900/40'
+                              ? 'ring-4 ring-rose-500/50'
+                              : 'ring-4 ring-emerald-500/50 animate-pulse'
+                            : 'opacity-80'
                         }`}
+                        style={{
+                          backgroundColor: `${avatarColor}33`,
+                          borderColor: avatarColor,
+                        }}
                       >
                         <img
                           src={member.user.avatarUrl}
                           alt={member.user.displayName}
-                          className="h-6 w-6 rounded-full"
+                          className="h-7 w-7 rounded-full object-cover"
                         />
                       </div>
-                      <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-[10px] font-semibold text-white whitespace-nowrap shadow flex items-center gap-1">
+
+                      {/* Name Badge */}
+                      <div className="mt-1 px-1.5 py-0.5 rounded-md bg-slate-900/95 border border-slate-700/80 text-[10px] font-semibold text-white whitespace-nowrap shadow-md flex items-center gap-1">
                         {soundOcclusion?.isBlocked ? (
                           <VolumeX className="h-2.5 w-2.5 text-rose-400" />
-                        ) : hasWebRtc ? (
-                          <Volume2 className="h-2.5 w-2.5 text-purple-400 animate-pulse" />
+                        ) : isPeer ? (
+                          <Volume2 className="h-2.5 w-2.5 text-emerald-400" />
                         ) : null}
                         <span>{member.user.displayName} {isMe ? '(You)' : ''}</span>
                         {soundOcclusion && (
-                          <span className={`text-[9px] font-mono ${soundOcclusion.isBlocked ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {soundOcclusion.isBlocked ? '[Wall Muted]' : `[${Math.round(soundOcclusion.totalTransmission * 100)}% vol]`}
+                          <span
+                            className={`text-[9px] font-mono ${
+                              soundOcclusion.isBlocked ? 'text-rose-400 font-bold' : 'text-emerald-400'
+                            }`}
+                          >
+                            {soundOcclusion.isBlocked
+                              ? '[Muted by Wall]'
+                              : `[${Math.round(soundOcclusion.totalTransmission * 100)}% vol]`}
                           </span>
                         )}
                       </div>
@@ -1168,38 +1744,50 @@ export default function App() {
                 })}
             </div>
 
-            {/* Controls footnote */}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="text-slate-400 flex items-center gap-1.5">
-                <span className="font-semibold text-slate-300">Controls:</span>
-                <span>WASD / Arrow Keys or Click to move. Red walls block movement and occlude acoustic line-of-sight.</span>
+            {/* Canvas Legend & Movement Instructions */}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs border-t border-slate-800/80 pt-3">
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" /> 100px Hearing Earshot
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full border border-dashed border-amber-400 inline-block" /> 110px Exit Hysteresis
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded bg-rose-500 inline-block" /> Soundproof Partition Wall
+                </span>
+              </div>
+              <div className="text-[11px] font-mono text-slate-400">
+                Controls: <strong>WASD / Arrow Keys</strong> or Click Canvas
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Active Channels & Sound Occlusion Inspector */}
-        <div className="space-y-6 lg:col-span-1">
-          {/* Active WebRTC Peer Channels */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3 flex items-center justify-between">
+        {/* Right Column: WebRTC Audio Channels & System Inspector (3 cols) */}
+        <div className="lg:col-span-3 space-y-5 overflow-y-auto max-h-[calc(100vh-100px)] pr-1">
+          {/* Active Audio Channels & Occlusion Inspector */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2.5 flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <PhoneCall className="h-4 w-4 text-purple-400" />
                 Audio Channels & Occlusion
               </span>
-              <span className="text-xs px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 font-mono">
+              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 font-mono">
                 {proximityPeers.length} in earshot
               </span>
             </h3>
 
             {proximityPeers.length === 0 ? (
-              <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800/80 text-center">
+              <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800 text-center">
                 <PhoneOff className="h-6 w-6 text-slate-600 mx-auto mb-1.5" />
-                <p className="text-xs text-slate-400">No peers within 100px earshot.</p>
-                <p className="text-[11px] text-slate-500 mt-1">Walk close to Bob to establish audio.</p>
+                <p className="text-xs text-slate-400">No peers within 100px listening radius.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Walk close to a peer or spawn a bot to test spatial audio.
+                </p>
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {proximityPeers.map((peer) => {
                   const member = activeUsers.find((u) => u.userId === peer.userId);
                   const occlusion = currentOffice
@@ -1210,38 +1798,56 @@ export default function App() {
                       )
                     : null;
 
+                  const isBlocked = occlusion?.isBlocked;
+                  const transmission = occlusion?.totalTransmission ?? 1;
+
                   return (
                     <div
                       key={peer.userId}
                       className={`p-2.5 rounded-lg border text-xs flex flex-col gap-1.5 ${
-                        occlusion?.isBlocked
+                        isBlocked
                           ? 'bg-rose-950/20 border-rose-500/30'
                           : 'bg-purple-950/20 border-purple-500/30'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          {occlusion?.isBlocked ? (
+                          {isBlocked ? (
                             <VolumeX className="h-3.5 w-3.5 text-rose-400" />
                           ) : (
-                            <Volume2 className="h-3.5 w-3.5 text-purple-400" />
+                            <Volume2 className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
                           )}
                           <span className="font-semibold text-slate-200">
                             {member?.user.displayName ?? peer.userId}
                           </span>
                         </div>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-                          occlusion?.isBlocked
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                        }`}>
-                          {occlusion?.isBlocked ? 'Soundproof Wall Muted (0%)' : `Audible (${Math.round((occlusion?.totalTransmission ?? 1) * 100)}%)`}
+                        <span
+                          className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
+                            isBlocked
+                              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          }`}
+                        >
+                          {isBlocked ? 'Wall Muted (0%)' : `Audible (${Math.round(transmission * 100)}%)`}
                         </span>
                       </div>
 
-                      <div className="text-[10px] text-slate-400 font-mono flex justify-between bg-slate-950/60 p-1.5 rounded">
-                        <span>Distance: {peer.distance} px</span>
-                        <span>Gain: {occlusion?.totalTransmission ?? 1.0}</span>
+                      {/* Audio Gain Meter */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                          <span>Distance: {peer.distance} px</span>
+                          <span>Gain: {isBlocked ? '0.00' : transmission.toFixed(2)}</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-150 ${
+                              isBlocked ? 'bg-rose-500' : 'bg-emerald-400'
+                            }`}
+                            style={{
+                              width: `${isBlocked ? 0 : Math.round(transmission * 100)}%`,
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
                   );
@@ -1250,24 +1856,52 @@ export default function App() {
             )}
           </div>
 
-          {/* Live Socket Event Audit Log */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm flex flex-col h-80">
-            <h3 className="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-2 flex items-center justify-between">
+          {/* Proximity Performance & Benchmarks */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center justify-between">
               <span className="flex items-center gap-2">
-                <Layers className="h-4 w-4 text-indigo-400" />
-                Integration Event Log
+                <Gauge className="h-4 w-4 text-emerald-400" />
+                Geospatial Engine Specs
               </span>
+              <span className="text-[10px] text-emerald-400 font-mono">MongoDB 2D Flat</span>
+            </h3>
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400">50 Users</div>
+                <div className="font-bold text-emerald-400 font-mono mt-0.5">&lt; 0.13 ms</div>
+                <div className="text-[9px] text-slate-500">P95 Latency</div>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400">100 Users</div>
+                <div className="font-bold text-emerald-400 font-mono mt-0.5">&lt; 0.10 ms</div>
+                <div className="text-[9px] text-slate-500">P95 Latency</div>
+              </div>
+              <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400">250 Users</div>
+                <div className="font-bold text-emerald-400 font-mono mt-0.5">&lt; 0.22 ms</div>
+                <div className="text-[9px] text-slate-500">P95 Latency</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Integration Event Log */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm flex flex-col h-64">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Layers className="h-4 w-4 text-indigo-400" />
+                Live Integration Audit Log
+              </h3>
               <button
                 onClick={() => setLogs([])}
                 className="text-[10px] text-slate-400 hover:text-slate-200"
               >
                 Clear
               </button>
-            </h3>
+            </div>
 
-            <div className="flex-1 overflow-y-auto space-y-1.5 font-mono text-[11px] pr-1">
+            <div className="flex-1 overflow-y-auto space-y-1 font-mono text-[10px] pr-1">
               {logs.length === 0 ? (
-                <p className="text-slate-600 text-xs italic py-2">Waiting for multi-module events...</p>
+                <p className="text-slate-600 text-xs italic py-2">Waiting for events...</p>
               ) : (
                 logs.map((log) => {
                   let color = 'text-slate-400';
@@ -1278,9 +1912,9 @@ export default function App() {
                   return (
                     <div
                       key={log.id}
-                      className="p-1.5 rounded bg-slate-950/50 border border-slate-800/60 leading-tight"
+                      className="p-1 rounded bg-slate-950/50 border border-slate-800/60 leading-tight"
                     >
-                      <span className="text-slate-500 text-[10px] mr-1.5">[{log.timestamp}]</span>
+                      <span className="text-slate-500 text-[9px] mr-1">[{log.timestamp}]</span>
                       <span className={color}>{log.message}</span>
                     </div>
                   );

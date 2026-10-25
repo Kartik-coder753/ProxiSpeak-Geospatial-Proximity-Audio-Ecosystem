@@ -12,7 +12,7 @@ export interface AvatarPosition {
 
 export interface PresenceUser {
   userId: string;
-  user: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl'>;
+  user: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'themeColor' | 'roleTitle' | 'badge'>;
   officeId: string;
   position: AvatarPosition;
   isOnline: boolean;

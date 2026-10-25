@@ -5,6 +5,11 @@ export interface User {
   avatarUrl?: string;
   email?: string;
   createdAt: Date;
+  roleTitle?: string;
+  department?: string;
+  themeColor?: string;
+  statusText?: string;
+  badge?: string;
 }
 
 export interface AuthContext {
@@ -17,3 +22,4 @@ export interface IAuthService {
   verifyToken(token: string): Promise<User | null>;
   generateToken(user: User): string;
 }
+
