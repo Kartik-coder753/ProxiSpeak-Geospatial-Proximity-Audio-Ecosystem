@@ -254,6 +254,23 @@ export class ProximityService implements IProximityService {
     // Update active peer map for this user
     this.activePeerSets.set(userId, newPeers);
 
+    // Maintain symmetric active peer sets for all peers in the office
+    for (const [peerId, dist] of newPeers.entries()) {
+      let peerMap = this.activePeerSets.get(peerId);
+      if (!peerMap) {
+        peerMap = new Map<string, number>();
+        this.activePeerSets.set(peerId, peerMap);
+      }
+      peerMap.set(userId, dist);
+    }
+
+    for (const exitedPeerId of exitedPeerIds) {
+      const peerMap = this.activePeerSets.get(exitedPeerId);
+      if (peerMap) {
+        peerMap.delete(userId);
+      }
+    }
+
     const currentPeersList: ProximityPeer[] = Array.from(newPeers.entries()).map(([pId, dist]) => ({
       userId: pId,
       distance: dist,
@@ -271,12 +288,35 @@ export class ProximityService implements IProximityService {
       });
     }
 
-    return {
+    const result: ProximityResult = {
       userId,
       officeId: targetOfficeId,
       peers: currentPeersList,
       calculatedAt: now,
     };
+
+    this.emitProximityUpdate(result);
+
+    return result;
+  }
+
+  private proximityUpdateSubscribers = new Set<(result: ProximityResult) => void>();
+
+  subscribeToProximityUpdates(listener: (result: ProximityResult) => void): () => void {
+    this.proximityUpdateSubscribers.add(listener);
+    return () => {
+      this.proximityUpdateSubscribers.delete(listener);
+    };
+  }
+
+  private emitProximityUpdate(result: ProximityResult): void {
+    for (const listener of this.proximityUpdateSubscribers) {
+      try {
+        listener(result);
+      } catch (err) {
+        console.error('Error in proximity update subscriber:', err);
+      }
+    }
   }
 
   /**

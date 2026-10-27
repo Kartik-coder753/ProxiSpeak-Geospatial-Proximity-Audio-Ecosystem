@@ -70,6 +70,17 @@ export async function createProxiSpeakServer(customPort?: number): Promise<Serve
     },
   }) as TypedServer;
 
+  // Broadcast live proximity updates immediately to connected clients whenever calculations change
+  proximityService.subscribeToProximityUpdates((result) => {
+    const sockets = presenceService.getUserSockets(result.userId);
+    for (const sid of sockets) {
+      io.to(sid).emit('proximity:update', {
+        officeId: result.officeId,
+        peers: result.peers,
+      });
+    }
+  });
+
   // Initialize officeService with live broadcast callback for layout updates
   const officeService = new OfficeService(officeRepo, membershipRepo, (officeId, layout) => {
     io.to(`office:${officeId}`).emit('office:layout_updated' as any, { officeId, layout });

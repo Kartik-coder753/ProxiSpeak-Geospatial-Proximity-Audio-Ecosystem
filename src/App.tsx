@@ -34,11 +34,17 @@ import {
   Info,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
   Gauge,
 } from 'lucide-react';
 import { Office, Obstacle, SoundOcclusionResult } from './shared/contracts/office.types';
 import {
   AvatarPosition,
+  FacingDirection,
   PresenceSnapshot,
   PresenceUser,
   ServerToClientEvents,
@@ -237,6 +243,10 @@ export default function App() {
   const socketRef = useRef<TypedClientSocket | null>(null);
   const sequenceRef = useRef(1);
   const mapCanvasRef = useRef<HTMLDivElement | null>(null);
+  const myPositionRef = useRef(myPosition);
+  myPositionRef.current = myPosition;
+  const walkTargetRef = useRef<{ x: number; y: number } | null>(null);
+  const keysDownRef = useRef<Set<string>>(new Set());
 
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
     const entry: LogEntry = {
@@ -562,6 +572,12 @@ export default function App() {
         );
       });
 
+      s.on('proximity:update' as any, (data: any) => {
+        if (data && Array.isArray(data.peers)) {
+          setProximityPeers(data.peers);
+        }
+      });
+
       s.on('avatar:move_rejected', (data) => {
         addLog('error', `Movement rejected: ${data.reason} (${data.code})`);
         setMyPosition(data.currentPosition);
@@ -855,9 +871,10 @@ export default function App() {
     [inOffice, selectedOfficeId, addLog]
   );
 
-  // Handle click on canvas
+  // Handle click on canvas with smooth waypoint walking
   const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!mapCanvasRef.current || !inOffice || !currentOffice) return;
+
     const rect = mapCanvasRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
@@ -868,33 +885,111 @@ export default function App() {
     const scaleX = maxX / rect.width;
     const scaleY = maxY / rect.height;
 
-    const actualX = Math.round(clickX * scaleX);
-    const actualY = Math.round(clickY * scaleY);
+    const actualX = Math.round(Math.max(20, Math.min(maxX - 20, clickX * scaleX)));
+    const actualY = Math.round(Math.max(20, Math.min(maxY - 20, clickY * scaleY)));
 
-    sendMove(actualX, actualY, `via Click`);
+    // Cancel any previous key hold and set target
+    walkTargetRef.current = { x: actualX, y: actualY };
+    addLog('info', `Target set to (${actualX}, ${actualY}) via click`);
   };
 
-  // Keyboard navigation
+  // Keyboard and Waypoint Walk Game Loop
   useEffect(() => {
+    if (!inOffice || !currentOffice) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!inOffice) return;
-      const step = 20;
-      let dx = 0;
-      let dy = 0;
+      const k = e.key.toLowerCase();
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(k)) {
+        e.preventDefault();
+        keysDownRef.current.add(k);
+        walkTargetRef.current = null; // Clear click walk on manual key press
+      }
+    };
 
-      if (e.key === 'ArrowUp' || e.key === 'w') dy = -step;
-      else if (e.key === 'ArrowDown' || e.key === 's') dy = step;
-      else if (e.key === 'ArrowLeft' || e.key === 'a') dx = -step;
-      else if (e.key === 'ArrowRight' || e.key === 'd') dx = step;
-      else return;
-
-      e.preventDefault();
-      sendMove(myPosition.x + dx, myPosition.y + dy);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      keysDownRef.current.delete(k);
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [inOffice, myPosition, sendMove]);
+    window.addEventListener('keyup', handleKeyUp);
+
+    // 60ms Smooth Movement Loop
+    const moveTimer = setInterval(() => {
+      if (!inOffice || !currentOffice || !socketRef.current) return;
+
+      const keys = keysDownRef.current;
+      const cur = myPositionRef.current;
+      const bounds = currentOffice.bounds || { minX: 0, minY: 0, maxX: 1200, maxY: 800 };
+      const radius = 14;
+
+      let dx = 0;
+      let dy = 0;
+
+      if (keys.size > 0) {
+        const step = 16;
+        if (keys.has('arrowup') || keys.has('w')) dy -= step;
+        if (keys.has('arrowdown') || keys.has('s')) dy += step;
+        if (keys.has('arrowleft') || keys.has('a')) dx -= step;
+        if (keys.has('arrowright') || keys.has('d')) dx += step;
+
+        if (dx !== 0 && dy !== 0) {
+          dx = Math.round(dx * 0.707);
+          dy = Math.round(dy * 0.707);
+        }
+      } else if (walkTargetRef.current) {
+        const target = walkTargetRef.current;
+        const toX = target.x - cur.x;
+        const toY = target.y - cur.y;
+        const dist = Math.hypot(toX, toY);
+
+        if (dist <= 12) {
+          walkTargetRef.current = null;
+        } else {
+          const step = Math.min(dist, 16);
+          dx = Math.round((toX / dist) * step);
+          dy = Math.round((toY / dist) * step);
+        }
+      }
+
+      if (dx === 0 && dy === 0) return;
+
+      let nextX = Math.max(bounds.minX + radius, Math.min(bounds.maxX - radius, cur.x + dx));
+      let nextY = Math.max(bounds.minY + radius, Math.min(bounds.maxY - radius, cur.y + dy));
+
+      // Check collision
+      const collides = clientGeometry.checkAvatarCollision(nextX, nextY, radius, currentOffice.obstacles);
+
+      if (collides) {
+        // Wall sliding: try X only
+        const collideX = clientGeometry.checkAvatarCollision(nextX, cur.y, radius, currentOffice.obstacles);
+        if (!collideX && nextX !== cur.x) {
+          nextY = cur.y;
+        } else {
+          // Try Y only
+          const collideY = clientGeometry.checkAvatarCollision(cur.x, nextY, radius, currentOffice.obstacles);
+          if (!collideY && nextY !== cur.y) {
+            nextX = cur.x;
+          } else {
+            // Blocked completely
+            if (walkTargetRef.current) walkTargetRef.current = null;
+            return;
+          }
+        }
+      }
+
+      const facing: FacingDirection =
+        Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+
+      sendMove(nextX, nextY);
+    }, 60);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      clearInterval(moveTimer);
+    };
+  }, [inOffice, currentOffice, sendMove]);
 
   // Automated Simulated Multi-Peer Bot Control
   const toggleBot = useCallback(
@@ -943,10 +1038,40 @@ export default function App() {
           );
         });
 
+        sock.on('signal:peer_eligible', async (data: PeerEligibleEvent) => {
+          if (data.shouldInitiate) {
+            const pc = new RTCPeerConnection(RTC_CONFIG);
+            botPcsRef.current.set(`${botKey}:${data.peerUserId}`, pc);
+
+            pc.onicecandidate = (evt) => {
+              if (evt.candidate) {
+                sock.emit('signal:ice', {
+                  targetUserId: data.peerUserId,
+                  negotiationId: data.negotiationId,
+                  candidate: evt.candidate.toJSON(),
+                });
+              }
+            };
+
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              sock.emit('signal:offer', {
+                targetUserId: data.peerUserId,
+                negotiationId: data.negotiationId,
+                sdp: { type: offer.type, sdp: offer.sdp },
+              });
+              addLog('info', `Bot ${bot.displayName} initiated WebRTC offer to ${data.peerUserId}`);
+            } catch (err) {
+              addLog('error', `Bot ${bot.displayName} offer error: ${(err as Error).message}`);
+            }
+          }
+        });
+
         sock.on('signal:offer', async (data: InboundOfferEvent) => {
           addLog('info', `Bot ${bot.displayName} received offer from ${data.senderUserId}; returning answer...`);
           const pc = new RTCPeerConnection(RTC_CONFIG);
-          botPcsRef.current.set(botKey, pc);
+          botPcsRef.current.set(`${botKey}:${data.senderUserId}`, pc);
 
           pc.onicecandidate = (evt) => {
             if (evt.candidate) {
@@ -970,6 +1095,18 @@ export default function App() {
             addLog('success', `Bot ${bot.displayName} answered WebRTC offer.`);
           } catch (e) {
             addLog('error', `Bot ${bot.displayName} failed answer: ${(e as Error).message}`);
+          }
+        });
+
+        sock.on('signal:answer', async (data: InboundAnswerEvent) => {
+          const pc = botPcsRef.current.get(`${botKey}:${data.senderUserId}`);
+          if (pc) {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+              addLog('success', `Bot ${bot.displayName} connected WebRTC audio channel with ${data.senderUserId}`);
+            } catch {
+              // ignore
+            }
           }
         });
 
@@ -1667,6 +1804,21 @@ export default function App() {
                 </svg>
               )}
 
+              {/* Active Click-to-Move Walk Waypoint Target */}
+              {walkTargetRef.current && inOffice && currentOffice && (
+                <div
+                  className="absolute pointer-events-none -translate-x-1/2 -translate-y-1/2 z-18 animate-pulse"
+                  style={{
+                    left: `${(walkTargetRef.current.x / maxX) * 100}%`,
+                    top: `${(walkTargetRef.current.y / maxY) * 100}%`,
+                  }}
+                >
+                  <div className="h-5 w-5 rounded-full border-2 border-indigo-400 bg-indigo-500/30 flex items-center justify-center">
+                    <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                  </div>
+                </div>
+              )}
+
               {/* Render Avatars */}
               {inOffice &&
                 activeUsers.map((member) => {
@@ -1727,17 +1879,22 @@ export default function App() {
                           <Volume2 className="h-2.5 w-2.5 text-emerald-400" />
                         ) : null}
                         <span>{member.user.displayName} {isMe ? '(You)' : ''}</span>
-                        {soundOcclusion && (
-                          <span
-                            className={`text-[9px] font-mono ${
-                              soundOcclusion.isBlocked ? 'text-rose-400 font-bold' : 'text-emerald-400'
-                            }`}
-                          >
-                            {soundOcclusion.isBlocked
-                              ? '[Muted by Wall]'
-                              : `[${Math.round(soundOcclusion.totalTransmission * 100)}% vol]`}
-                          </span>
-                        )}
+                        {soundOcclusion && (() => {
+                          const liveDist = Math.round(Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y));
+                          const distanceFactor = Math.max(0, 1 - liveDist / (proximityConfig.exitRadius || 110));
+                          const liveVol = soundOcclusion.isBlocked ? 0 : Math.round(distanceFactor * soundOcclusion.totalTransmission * 100);
+                          return (
+                            <span
+                              className={`text-[9px] font-mono ${
+                                soundOcclusion.isBlocked ? 'text-rose-400 font-bold' : 'text-emerald-400'
+                              }`}
+                            >
+                              {soundOcclusion.isBlocked
+                                ? '[Muted by Wall]'
+                                : `[${liveVol}% vol • ${liveDist}px]`}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -1757,8 +1914,66 @@ export default function App() {
                   <span className="h-2.5 w-2.5 rounded bg-rose-500 inline-block" /> Soundproof Partition Wall
                 </span>
               </div>
-              <div className="text-[11px] font-mono text-slate-400">
-                Controls: <strong>WASD / Arrow Keys</strong> or Click Canvas
+              <div className="flex items-center gap-3">
+                <div className="text-[11px] font-mono text-slate-400 hidden sm:block">
+                  Controls: <strong>WASD / Arrow Keys</strong> or Click Canvas
+                </div>
+
+                {/* On-Screen Interactive Directional Pad */}
+                <div className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      walkTargetRef.current = null;
+                      keysDownRef.current.add('arrowleft');
+                      setTimeout(() => keysDownRef.current.delete('arrowleft'), 120);
+                    }}
+                    title="Move Left (A / Left Arrow)"
+                    className="p-1 rounded bg-slate-900 hover:bg-indigo-600 text-slate-300 hover:text-white border border-slate-700/60 transition active:scale-95"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                  </button>
+
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        walkTargetRef.current = null;
+                        keysDownRef.current.add('arrowup');
+                        setTimeout(() => keysDownRef.current.delete('arrowup'), 120);
+                      }}
+                      title="Move Up (W / Up Arrow)"
+                      className="p-1 rounded bg-slate-900 hover:bg-indigo-600 text-slate-300 hover:text-white border border-slate-700/60 transition active:scale-95"
+                    >
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        walkTargetRef.current = null;
+                        keysDownRef.current.add('arrowdown');
+                        setTimeout(() => keysDownRef.current.delete('arrowdown'), 120);
+                      }}
+                      title="Move Down (S / Down Arrow)"
+                      className="p-1 rounded bg-slate-900 hover:bg-indigo-600 text-slate-300 hover:text-white border border-slate-700/60 transition active:scale-95"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      walkTargetRef.current = null;
+                      keysDownRef.current.add('arrowright');
+                      setTimeout(() => keysDownRef.current.delete('arrowright'), 120);
+                    }}
+                    title="Move Right (D / Right Arrow)"
+                    className="p-1 rounded bg-slate-900 hover:bg-indigo-600 text-slate-300 hover:text-white border border-slate-700/60 transition active:scale-95"
+                  >
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1832,23 +2047,43 @@ export default function App() {
                         </span>
                       </div>
 
-                      {/* Audio Gain Meter */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                          <span>Distance: {peer.distance} px</span>
-                          <span>Gain: {isBlocked ? '0.00' : transmission.toFixed(2)}</span>
-                        </div>
-                        <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all duration-150 ${
-                              isBlocked ? 'bg-rose-500' : 'bg-emerald-400'
-                            }`}
-                            style={{
-                              width: `${isBlocked ? 0 : Math.round(transmission * 100)}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
+                      {/* Dynamic Proximity Audio & WebRTC Gain Meter */}
+                      {(() => {
+                        const liveDist = member
+                          ? Math.round(Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y))
+                          : Math.round(peer.distance);
+                        const distanceFactor = Math.max(0, 1 - liveDist / (proximityConfig.exitRadius || 110));
+                        const liveVolume = isBlocked ? 0 : Math.round(distanceFactor * transmission * 100);
+
+                        return (
+                          <div className="space-y-1 mt-1">
+                            <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                              <span>Distance: <strong className="text-white">{liveDist}px</strong></span>
+                              <span>Volume: <strong className={liveVolume > 50 ? 'text-emerald-400' : liveVolume > 0 ? 'text-amber-400' : 'text-rose-400'}>{liveVolume}%</strong></span>
+                            </div>
+                            <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-75 ${
+                                  isBlocked
+                                    ? 'bg-rose-500'
+                                    : liveVolume > 60
+                                    ? 'bg-emerald-400'
+                                    : liveVolume > 20
+                                    ? 'bg-amber-400'
+                                    : 'bg-indigo-400'
+                                }`}
+                                style={{
+                                  width: `${liveVolume}%`,
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                              <span>Acoustics: {Math.round(transmission * 100)}% through wall</span>
+                              <span className="text-indigo-400">P2P Audio: Active</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}

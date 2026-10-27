@@ -1,3 +1,4 @@
+import { ProximityPeer } from './proximity.interface';
 import { User } from './user.types';
 
 export type FacingDirection = 'up' | 'down' | 'left' | 'right';
@@ -65,6 +66,7 @@ export interface ServerToClientEvents {
   'presence:left': (data: { officeId: string; userId: string; reason?: string }) => void;
   'avatar:moved': (data: { officeId: string; userId: string; position: AvatarPosition }) => void;
   'avatar:move_rejected': (data: { officeId: string; reason: string; code: string; currentPosition: AvatarPosition }) => void;
+  'proximity:update': (data: { officeId: string; peers: ProximityPeer[] }) => void;
   'signal:offer': (data: InboundOfferEvent) => void;
   'signal:answer': (data: InboundAnswerEvent) => void;
   'signal:ice': (data: InboundIceEvent) => void;
