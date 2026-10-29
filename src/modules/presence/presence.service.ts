@@ -398,6 +398,46 @@ export class PresenceService {
     };
   }
 
+  /**
+   * Heartbeat keep-alive to refresh lastSeenAt and maintain fresh proximity state
+   */
+  touchHeartbeat(userId: string, officeId?: string): void {
+    const targetOffice = officeId ?? this.userCurrentOffice.get(userId);
+    const now = Date.now();
+    if (targetOffice) {
+      const officeMap = this.officePresences.get(targetOffice);
+      if (officeMap) {
+        const member = officeMap.get(userId);
+        if (member && member.isOnline) {
+          member.lastSeenAt = now;
+          if (this.proximityService && (this.proximityService as any).mongoStore) {
+            (this.proximityService as any).mongoStore.upsertAvatar(
+              userId,
+              targetOffice,
+              [member.position.x, member.position.y],
+              new Date(now)
+            );
+          }
+        }
+      }
+    } else {
+      for (const [oId, officeMap] of this.officePresences.entries()) {
+        const member = officeMap.get(userId);
+        if (member && member.isOnline) {
+          member.lastSeenAt = now;
+          if (this.proximityService && (this.proximityService as any).mongoStore) {
+            (this.proximityService as any).mongoStore.upsertAvatar(
+              userId,
+              oId,
+              [member.position.x, member.position.y],
+              new Date(now)
+            );
+          }
+        }
+      }
+    }
+  }
+
   // --- Read Queries for Member 2, Member 3 and Other Modules ---
 
   getOnlineUsers(): string[] {

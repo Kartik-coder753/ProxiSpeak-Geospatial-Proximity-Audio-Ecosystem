@@ -185,7 +185,8 @@ export function registerPresenceHandlers(
 
     // Event: ping for connection keep-alive
     socket.on('presence:ping', () => {
-      // keep-alive receipt
+      const officeId = (socket.data as SocketData)?.officeId;
+      presenceService.touchHeartbeat(user.id, officeId);
     });
 
     // Socket disconnect handler

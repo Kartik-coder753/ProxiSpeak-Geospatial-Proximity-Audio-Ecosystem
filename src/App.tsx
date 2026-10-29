@@ -428,10 +428,10 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentOffice, selectedOfficeId, selectedUser]);
 
-  // Poll proximity peers for active user & update spatial audio nodes
+  // Permanent Continuous Spatial Audio Engine:
+  // Evaluates real-time proximity directly from coordinates on every step so audio NEVER stops
   useEffect(() => {
-    if (!selectedUser || !inOffice || !currentOffice) {
-      setProximityPeers([]);
+    if (!spatialAudioEnabled || !inOffice || !currentOffice || !selectedUser) {
       peerAudioNodesRef.current.forEach((node) => {
         if (audioCtxRef.current) {
           node.gain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
@@ -440,56 +440,85 @@ export default function App() {
       return;
     }
 
-    const fetchPeers = async () => {
-      try {
-        const res = await fetch(`/api/proximity/peers/${selectedUser.user.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          const peers: ProximityPeer[] = data.peers || [];
-          setProximityPeers(peers);
+    initSpatialAudioEngine();
 
-          // Update audio synthesis for each peer
-          peers.forEach((p) => {
-            const member = activeUsers.find((u) => u.userId === p.userId);
-            if (member) {
-              const occlusion = clientGeometry.checkSoundObstruction(
-                { x: myPosition.x, y: myPosition.y },
-                { x: member.position.x, y: member.position.y },
-                currentOffice.obstacles
-              );
-              updateSpatialAudio(
-                p.userId,
-                p.distance,
-                occlusion.totalTransmission,
-                member.position.x - myPosition.x
-              );
-            }
-          });
+    const otherUsers = activeUsers.filter((u) => u.userId !== selectedUser.user.id);
+    const activePeersList: ProximityPeer[] = [];
+    const audiblePeerIds = new Set<string>();
 
-          // Silence any peer that left proximity
-          peerAudioNodesRef.current.forEach((_val, peerId) => {
-            if (!peers.some((p) => p.userId === peerId)) {
-              silencePeerAudio(peerId);
-            }
-          });
-        }
-      } catch {
-        // silent fallback
+    otherUsers.forEach((remoteUser) => {
+      const dist = Math.hypot(remoteUser.position.x - myPosition.x, remoteUser.position.y - myPosition.y);
+      const exitLimit = proximityConfig.exitRadius || 110;
+
+      if (dist <= exitLimit) {
+        audiblePeerIds.add(remoteUser.userId);
+        activePeersList.push({
+          userId: remoteUser.userId,
+          distance: Math.round(dist * 10) / 10,
+        });
+
+        const occlusion = clientGeometry.checkSoundObstruction(
+          { x: myPosition.x, y: myPosition.y },
+          { x: remoteUser.position.x, y: remoteUser.position.y },
+          currentOffice.obstacles
+        );
+
+        // Update permanent audio with continuous distance attenuation & occlusion
+        updateSpatialAudio(
+          remoteUser.userId,
+          dist,
+          occlusion.totalTransmission,
+          remoteUser.position.x - myPosition.x
+        );
       }
-    };
+    });
 
-    fetchPeers();
-    const peerInterval = setInterval(fetchPeers, 1000);
-    return () => clearInterval(peerInterval);
+    // Update proximity peers state so UI meters and cards reflect immediately
+    setProximityPeers(activePeersList);
+
+    // Silence peers that moved out of earshot
+    peerAudioNodesRef.current.forEach((_val, peerId) => {
+      if (!audiblePeerIds.has(peerId)) {
+        silencePeerAudio(peerId);
+      }
+    });
   }, [
-    selectedUser,
-    inOffice,
     myPosition,
     activeUsers,
+    inOffice,
     currentOffice,
+    selectedUser,
+    spatialAudioEnabled,
+    proximityConfig,
     updateSpatialAudio,
     silencePeerAudio,
+    initSpatialAudioEngine,
   ]);
+
+  // Keep-Alive Heartbeat: Pings backend every 3 seconds so user presence & sound never expire
+  useEffect(() => {
+    if (!connected || !inOffice || !socketRef.current) return;
+
+    const pingTimer = setInterval(() => {
+      socketRef.current?.emit('presence:ping');
+    }, 3000);
+
+    return () => clearInterval(pingTimer);
+  }, [connected, inOffice]);
+
+  // Simulated Bots Keep-Alive Heartbeat: Keeps spawned bots permanently fresh and audible
+  useEffect(() => {
+    const botPingTimer = setInterval(() => {
+      simBots.forEach((bot) => {
+        if (bot.active) {
+          const sock = botSocketsRef.current.get(bot.userId);
+          sock?.emit('presence:ping');
+        }
+      });
+    }, 3000);
+
+    return () => clearInterval(botPingTimer);
+  }, [simBots]);
 
   // Cleanup helper for WebRTC peer connection
   const closePeerConnection = useCallback(
@@ -833,13 +862,29 @@ export default function App() {
     });
   }, [selectedOfficeId, addLog]);
 
-  // Send movement update
+  // Send movement update with instant optimistic avatar synchronization
   const sendMove = useCallback(
     (targetX: number, targetY: number, label?: string) => {
-      if (!socketRef.current || !inOffice) return;
+      if (!socketRef.current || !inOffice || !selectedUser) return;
 
       const nextSeq = sequenceRef.current++;
       const now = Date.now();
+
+      // OPTIMISTIC UPDATE: Sync myPosition and activeUsers immediately so avatar & circle move in lockstep
+      const optimisticPos: AvatarPosition = {
+        x: targetX,
+        y: targetY,
+        sequence: nextSeq,
+        timestamp: now,
+      };
+
+      setMyPosition(optimisticPos);
+      myPositionRef.current = optimisticPos;
+      setActiveUsers((prev) =>
+        prev.map((u) =>
+          u.userId === selectedUser.user.id ? { ...u, position: optimisticPos } : u
+        )
+      );
 
       socketRef.current.emit(
         'avatar:move',
@@ -855,9 +900,19 @@ export default function App() {
             addLog('error', `Move to (${targetX}, ${targetY}) rejected: ${res.error}`);
             if (res.position) {
               setMyPosition(res.position);
+              myPositionRef.current = res.position;
+              sequenceRef.current = res.position.sequence + 1;
+              setActiveUsers((prev) =>
+                prev.map((u) => (u.userId === selectedUser.user.id ? { ...u, position: res.position! } : u))
+              );
             }
           } else if (res && res.position) {
             setMyPosition(res.position);
+            myPositionRef.current = res.position;
+            sequenceRef.current = res.position.sequence + 1;
+            setActiveUsers((prev) =>
+              prev.map((u) => (u.userId === selectedUser.user.id ? { ...u, position: res.position! } : u))
+            );
             if (label) {
               addLog(
                 'info',
@@ -868,7 +923,7 @@ export default function App() {
         }
       );
     },
-    [inOffice, selectedOfficeId, addLog]
+    [inOffice, selectedOfficeId, selectedUser, addLog]
   );
 
   // Handle click on canvas with smooth waypoint walking
@@ -1819,12 +1874,26 @@ export default function App() {
                 </div>
               )}
 
-              {/* Render Avatars */}
-              {inOffice &&
-                activeUsers.map((member) => {
+              {/* Render Avatars - Synchronized with myPosition */}
+              {inOffice && (() => {
+                const list = [...activeUsers];
+                if (selectedUser && !list.some((u) => u.userId === selectedUser.user.id)) {
+                  list.push({
+                    userId: selectedUser.user.id,
+                    user: selectedUser.user,
+                    officeId: selectedOfficeId,
+                    position: myPosition,
+                    isOnline: true,
+                    joinedAt: Date.now(),
+                    lastSeenAt: Date.now(),
+                  });
+                }
+                return list.map((member) => {
                   const isMe = member.userId === selectedUser?.user.id;
-                  const leftPct = (member.position.x / maxX) * 100;
-                  const topPct = (member.position.y / maxY) * 100;
+                  const curX = isMe ? myPosition.x : member.position.x;
+                  const curY = isMe ? myPosition.y : member.position.y;
+                  const leftPct = (curX / maxX) * 100;
+                  const topPct = (curY / maxY) * 100;
                   const isPeer = proximityPeers.some((p) => p.userId === member.userId);
                   const hasWebRtc = peerConnections[member.userId]?.connectionState === 'connected';
 
@@ -1898,7 +1967,8 @@ export default function App() {
                       </div>
                     </div>
                   );
-                })}
+                });
+              })()}
             </div>
 
             {/* Canvas Legend & Movement Instructions */}
