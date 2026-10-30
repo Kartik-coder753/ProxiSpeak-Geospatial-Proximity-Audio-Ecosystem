@@ -242,6 +242,7 @@ export default function App() {
 
   const socketRef = useRef<TypedClientSocket | null>(null);
   const sequenceRef = useRef(1);
+  const botSequencesRef = useRef<Map<string, number>>(new Map());
   const mapCanvasRef = useRef<HTMLDivElement | null>(null);
   const myPositionRef = useRef(myPosition);
   myPositionRef.current = myPosition;
@@ -853,8 +854,14 @@ export default function App() {
     if (!socketRef.current || !selectedOfficeId) return;
     socketRef.current.emit('office:leave', { officeId: selectedOfficeId }, () => {
       setInOffice(false);
+      walkTargetRef.current = null;
       setActiveUsers([]);
       setProximityPeers([]);
+      peerAudioNodesRef.current.forEach((node) => {
+        if (audioCtxRef.current) {
+          node.gain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
+        }
+      });
       activePeerConnectionsRef.current.forEach(({ pc }) => pc.close());
       activePeerConnectionsRef.current.clear();
       setPeerConnections({});
@@ -1223,13 +1230,15 @@ export default function App() {
           nextY = Math.round(bot.position.y + (dy / dist) * step);
         }
 
+        const nextBotSeq = (botSequencesRef.current.get(bot.userId) ?? 1) + 1;
+        botSequencesRef.current.set(bot.userId, nextBotSeq);
         sock.emit(
           'avatar:move',
           {
             officeId: selectedOfficeId,
             x: nextX,
             y: nextY,
-            sequence: Date.now() % 100000,
+            sequence: nextBotSeq,
             timestamp: Date.now(),
           },
           (res) => {

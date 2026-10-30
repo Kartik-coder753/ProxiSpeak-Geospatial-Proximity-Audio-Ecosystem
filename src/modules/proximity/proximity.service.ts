@@ -144,6 +144,12 @@ export class ProximityService implements IProximityService {
           currentPeers: currentPeerList,
           calculatedAt: now,
         });
+        this.emitProximityUpdate({
+          userId: otherUserId,
+          officeId,
+          peers: currentPeerList,
+          calculatedAt: now,
+        });
       }
     }
 
@@ -262,12 +268,24 @@ export class ProximityService implements IProximityService {
         this.activePeerSets.set(peerId, peerMap);
       }
       peerMap.set(userId, dist);
+      this.emitProximityUpdate({
+        userId: peerId,
+        officeId: targetOfficeId,
+        peers: Array.from(peerMap.entries()).map(([pId, d]) => ({ userId: pId, distance: d })),
+        calculatedAt: now,
+      });
     }
 
     for (const exitedPeerId of exitedPeerIds) {
       const peerMap = this.activePeerSets.get(exitedPeerId);
       if (peerMap) {
         peerMap.delete(userId);
+        this.emitProximityUpdate({
+          userId: exitedPeerId,
+          officeId: targetOfficeId,
+          peers: Array.from(peerMap.entries()).map(([pId, d]) => ({ userId: pId, distance: d })),
+          calculatedAt: now,
+        });
       }
     }
 
