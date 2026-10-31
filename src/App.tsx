@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { PeerAudioWaveform } from './components/PeerAudioWaveform';
 import { io as ClientSocket, Socket } from 'socket.io-client';
 import {
   ShieldCheck,
@@ -157,8 +158,17 @@ export default function App() {
   // Web Audio Context for synthesized realistic spatial audio feedback
   const audioCtxRef = useRef<AudioContext | null>(null);
   const peerAudioNodesRef = useRef<
-    Map<string, { osc: OscillatorNode; panner: StereoPannerNode; gain: GainNode }>
+    Map<
+      string,
+      {
+        osc: OscillatorNode;
+        panner: StereoPannerNode;
+        gain: GainNode;
+        analyser: AnalyserNode;
+      }
+    >
   >(new Map());
+  const localAnalyserRef = useRef<AnalyserNode | null>(null);
 
   // Automated simulated multi-peer bots
   const [simBots, setSimBots] = useState<SimulatedBot[]>([
@@ -296,12 +306,17 @@ export default function App() {
 
           gain.gain.setValueAtTime(0, ctx.currentTime);
 
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 64;
+          analyser.smoothingTimeConstant = 0.7;
+
           osc.connect(panner);
           panner.connect(gain);
-          gain.connect(ctx.destination);
+          gain.connect(analyser);
+          analyser.connect(ctx.destination);
           osc.start();
 
-          nodes = { osc, panner, gain };
+          nodes = { osc, panner, gain, analyser };
           peerAudioNodesRef.current.set(peerId, nodes);
         } catch {
           return;
@@ -345,6 +360,17 @@ export default function App() {
         addLog('success', 'Microphone stream captured successfully.');
 
         const audioTrack = stream.getAudioTracks()[0];
+        if (audioCtxRef.current) {
+          try {
+            const src = audioCtxRef.current.createMediaStreamSource(stream);
+            const localAnalyser = audioCtxRef.current.createAnalyser();
+            localAnalyser.fftSize = 64;
+            src.connect(localAnalyser);
+            localAnalyserRef.current = localAnalyser;
+          } catch {
+            // ignore
+          }
+        }
         activePeerConnectionsRef.current.forEach(({ pc }) => {
           pc.getSenders().forEach((s) => {
             if (s.track?.kind === 'audio') {
@@ -2072,102 +2098,79 @@ export default function App() {
               </span>
             </h3>
 
-            {proximityPeers.length === 0 ? (
-              <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800 text-center">
-                <PhoneOff className="h-6 w-6 text-slate-600 mx-auto mb-1.5" />
-                <p className="text-xs text-slate-400">No peers within 100px listening radius.</p>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Walk close to a peer or spawn a bot to test spatial audio.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {proximityPeers.map((peer) => {
-                  const member = activeUsers.find((u) => u.userId === peer.userId);
-                  const occlusion = currentOffice
-                    ? clientGeometry.checkSoundObstruction(
-                        { x: myPosition.x, y: myPosition.y },
-                        { x: member?.position.x ?? 0, y: member?.position.y ?? 0 },
-                        currentOffice.obstacles
-                      )
-                    : null;
+            {/* Real-Time Waveform Visualizations using Web Audio API & Recharts */}
+            <div className="space-y-3">
+              {/* Local Microphone Waveform (if enabled) */}
+              {micActive && selectedUser && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono px-1">
+                    <span className="flex items-center gap-1.5 text-indigo-400 font-semibold">
+                      <Mic className="h-3 w-3" /> My Microphone (Local Audio)
+                    </span>
+                    <span className="text-emerald-400 font-medium">Transmitting</span>
+                  </div>
+                  <PeerAudioWaveform
+                    peerId={selectedUser.user.id}
+                    displayName={`${selectedUser.user.displayName} (You)`}
+                    analyserNode={localAnalyserRef.current}
+                    isBlocked={false}
+                    transmission={1.0}
+                    distance={0}
+                    themeColor="#6366f1"
+                    isSpatialAudioEnabled={true}
+                  />
+                </div>
+              )}
 
-                  const isBlocked = occlusion?.isBlocked;
-                  const transmission = occlusion?.totalTransmission ?? 1;
+              {/* Active Peer Audio Stream Waveforms */}
+              {proximityPeers.length === 0 ? (
+                <div className="p-4 rounded-lg bg-slate-950/40 border border-slate-800 text-center">
+                  <PhoneOff className="h-6 w-6 text-slate-600 mx-auto mb-1.5" />
+                  <p className="text-xs text-slate-400 font-medium">No peers within 100px listening radius.</p>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Walk close to an avatar or spawn a bot to visualize real-time audio waveforms.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {proximityPeers.map((peer) => {
+                    const member = activeUsers.find((u) => u.userId === peer.userId);
+                    const occlusion = currentOffice
+                      ? clientGeometry.checkSoundObstruction(
+                          { x: myPosition.x, y: myPosition.y },
+                          { x: member?.position.x ?? 0, y: member?.position.y ?? 0 },
+                          currentOffice.obstacles
+                        )
+                      : null;
+                    const isBlocked = occlusion?.isBlocked ?? false;
+                    const transmission = occlusion?.totalTransmission ?? 1;
+                    const liveDist = member
+                      ? Math.round(
+                          Math.hypot(
+                            member.position.x - myPosition.x,
+                            member.position.y - myPosition.y
+                          )
+                        )
+                      : Math.round(peer.distance);
+                    const analyserNode = peerAudioNodesRef.current.get(peer.userId)?.analyser;
 
-                  return (
-                    <div
-                      key={peer.userId}
-                      className={`p-2.5 rounded-lg border text-xs flex flex-col gap-1.5 ${
-                        isBlocked
-                          ? 'bg-rose-950/20 border-rose-500/30'
-                          : 'bg-purple-950/20 border-purple-500/30'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          {isBlocked ? (
-                            <VolumeX className="h-3.5 w-3.5 text-rose-400" />
-                          ) : (
-                            <Volume2 className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
-                          )}
-                          <span className="font-semibold text-slate-200">
-                            {member?.user.displayName ?? peer.userId}
-                          </span>
-                        </div>
-                        <span
-                          className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-                            isBlocked
-                              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          }`}
-                        >
-                          {isBlocked ? 'Wall Muted (0%)' : `Audible (${Math.round(transmission * 100)}%)`}
-                        </span>
-                      </div>
-
-                      {/* Dynamic Proximity Audio & WebRTC Gain Meter */}
-                      {(() => {
-                        const liveDist = member
-                          ? Math.round(Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y))
-                          : Math.round(peer.distance);
-                        const distanceFactor = Math.max(0, 1 - liveDist / (proximityConfig.exitRadius || 110));
-                        const liveVolume = isBlocked ? 0 : Math.round(distanceFactor * transmission * 100);
-
-                        return (
-                          <div className="space-y-1 mt-1">
-                            <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                              <span>Distance: <strong className="text-white">{liveDist}px</strong></span>
-                              <span>Volume: <strong className={liveVolume > 50 ? 'text-emerald-400' : liveVolume > 0 ? 'text-amber-400' : 'text-rose-400'}>{liveVolume}%</strong></span>
-                            </div>
-                            <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full transition-all duration-75 ${
-                                  isBlocked
-                                    ? 'bg-rose-500'
-                                    : liveVolume > 60
-                                    ? 'bg-emerald-400'
-                                    : liveVolume > 20
-                                    ? 'bg-amber-400'
-                                    : 'bg-indigo-400'
-                                }`}
-                                style={{
-                                  width: `${liveVolume}%`,
-                                }}
-                              />
-                            </div>
-                            <div className="flex justify-between text-[9px] text-slate-500 font-mono">
-                              <span>Acoustics: {Math.round(transmission * 100)}% through wall</span>
-                              <span className="text-indigo-400">P2P Audio: Active</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    return (
+                      <PeerAudioWaveform
+                        key={peer.userId}
+                        peerId={peer.userId}
+                        displayName={member?.user.displayName ?? peer.userId}
+                        analyserNode={analyserNode}
+                        isBlocked={isBlocked}
+                        transmission={transmission}
+                        distance={liveDist}
+                        themeColor={member?.user.themeColor || '#10b981'}
+                        isSpatialAudioEnabled={spatialAudioEnabled}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Proximity Performance & Benchmarks */}
