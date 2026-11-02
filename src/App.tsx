@@ -169,6 +169,10 @@ export default function App() {
     >
   >(new Map());
   const localAnalyserRef = useRef<AnalyserNode | null>(null);
+  const [peerPlaybackVolumes, setPeerPlaybackVolumes] = useState<Record<string, number>>({});
+  const [peerMuted, setPeerMuted] = useState<Record<string, boolean>>({});
+  const peerPlaybackVolumesRef = useRef<Map<string, number>>(new Map());
+  const peerMutedRef = useRef<Map<string, boolean>>(new Map());
 
   // Automated simulated multi-peer bots
   const [simBots, setSimBots] = useState<SimulatedBot[]>([
@@ -323,9 +327,12 @@ export default function App() {
         }
       }
 
-      // Distance attenuation (0 to 100px)
+      // Distance attenuation (0 to 100px) and individual peer playback level
+      const userVolSetting = peerMutedRef.current.get(peerId)
+        ? 0
+        : (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
       const distanceFactor = Math.max(0, 1 - distance / 110);
-      const targetVolume = distanceFactor * occlusionTransmission * 0.12;
+      const targetVolume = distanceFactor * occlusionTransmission * 0.12 * userVolSetting;
       const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
 
       const now = ctx.currentTime;
@@ -341,6 +348,69 @@ export default function App() {
       nodes.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.05);
     }
   }, []);
+
+  // Individual peer volume control handler
+  const handlePeerVolumeChange = useCallback(
+    (peerId: string, volume: number) => {
+      setPeerPlaybackVolumes((prev) => ({ ...prev, [peerId]: volume }));
+      peerPlaybackVolumesRef.current.set(peerId, volume);
+
+      if (volume > 0 && peerMutedRef.current.get(peerId)) {
+        setPeerMuted((prev) => ({ ...prev, [peerId]: false }));
+        peerMutedRef.current.set(peerId, false);
+      }
+
+      // Immediately apply to Web Audio gain node
+      const nodes = peerAudioNodesRef.current.get(peerId);
+      if (nodes && audioCtxRef.current) {
+        const isMuted = volume === 0 || !!peerMutedRef.current.get(peerId);
+        const volMultiplier = isMuted ? 0 : volume / 100;
+        const member = activeUsers.find((u) => u.userId === peerId);
+        if (member && currentOffice) {
+          const dist = Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y);
+          const distanceFactor = Math.max(0, 1 - dist / 110);
+          const occlusion = clientGeometry.checkSoundObstruction(
+            { x: myPosition.x, y: myPosition.y },
+            { x: member.position.x, y: member.position.y },
+            currentOffice.obstacles
+          );
+          const targetVol = distanceFactor * occlusion.totalTransmission * 0.12 * volMultiplier;
+          nodes.gain.gain.setTargetAtTime(targetVol, audioCtxRef.current.currentTime, 0.03);
+        }
+      }
+    },
+    [activeUsers, currentOffice, myPosition]
+  );
+
+  const handleTogglePeerMute = useCallback(
+    (peerId: string) => {
+      const nextMuted = !peerMutedRef.current.get(peerId);
+      setPeerMuted((prev) => ({ ...prev, [peerId]: nextMuted }));
+      peerMutedRef.current.set(peerId, nextMuted);
+
+      const nodes = peerAudioNodesRef.current.get(peerId);
+      if (nodes && audioCtxRef.current) {
+        if (nextMuted) {
+          nodes.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.03);
+        } else {
+          const volMultiplier = (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
+          const member = activeUsers.find((u) => u.userId === peerId);
+          if (member && currentOffice) {
+            const dist = Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y);
+            const distanceFactor = Math.max(0, 1 - dist / 110);
+            const occlusion = clientGeometry.checkSoundObstruction(
+              { x: myPosition.x, y: myPosition.y },
+              { x: member.position.x, y: member.position.y },
+              currentOffice.obstacles
+            );
+            const targetVol = distanceFactor * occlusion.totalTransmission * 0.12 * volMultiplier;
+            nodes.gain.gain.setTargetAtTime(targetVol, audioCtxRef.current.currentTime, 0.03);
+          }
+        }
+      }
+    },
+    [activeUsers, currentOffice, myPosition]
+  );
 
   // Initialize synthetic or microphone audio track
   const toggleMicrophone = async () => {
@@ -2118,6 +2188,7 @@ export default function App() {
                     distance={0}
                     themeColor="#6366f1"
                     isSpatialAudioEnabled={true}
+                    isLocalUser={true}
                   />
                 </div>
               )}
@@ -2152,6 +2223,8 @@ export default function App() {
                           )
                         )
                       : Math.round(peer.distance);
+                    const relativeX = (member?.position.x ?? 0) - myPosition.x;
+                    const pan = Math.max(-1, Math.min(1, relativeX / 150));
                     const analyserNode = peerAudioNodesRef.current.get(peer.userId)?.analyser;
 
                     return (
@@ -2163,8 +2236,14 @@ export default function App() {
                         isBlocked={isBlocked}
                         transmission={transmission}
                         distance={liveDist}
+                        pan={pan}
+                        relativeX={relativeX}
                         themeColor={member?.user.themeColor || '#10b981'}
                         isSpatialAudioEnabled={spatialAudioEnabled}
+                        playbackVolume={peerPlaybackVolumes[peer.userId] ?? 100}
+                        isMuted={peerMuted[peer.userId] ?? false}
+                        onPlaybackVolumeChange={(vol) => handlePeerVolumeChange(peer.userId, vol)}
+                        onToggleMute={() => handleTogglePeerMute(peer.userId)}
                       />
                     );
                   })}
