@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Headphones,
   Gauge,
+  EyeOff,
 } from 'lucide-react';
 
 interface WaveformDataPoint {
@@ -42,12 +43,13 @@ export interface PeerAudioWaveformProps {
   isLocalUser?: boolean;
   pan?: number; // -1.0 (hard left) to +1.0 (hard right)
   relativeX?: number; // pixel offset from local user
+  isWindowFocused?: boolean;
 }
 
 /**
  * Real-time Audio Waveform & Speaking Volume Visualizer
  * Uses Web Audio API AnalyserNode, Recharts, an interactive volume range slider,
- * a stereo panning meter, and a real-time vertical peak decibel meter.
+ * a stereo panning meter, a real-time vertical peak decibel meter, and automatic window focus muting.
  */
 export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   peerId,
@@ -65,6 +67,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   isLocalUser = false,
   pan,
   relativeX,
+  isWindowFocused = true,
 }) => {
   const [chartMode, setChartMode] = useState<'wave' | 'spectrum'>('wave');
   const [dataPoints, setDataPoints] = useState<WaveformDataPoint[]>(() =>
@@ -84,8 +87,12 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   // Unique SVG gradient IDs to prevent collisions between multiple peers
   const gradientId = useId().replace(/:/g, '');
 
+  // Is audio active considering window focus for remote peers
+  const isAudioActive = isSpatialAudioEnabled && (isLocalUser || isWindowFocused);
+
   // Effective volume factor (0.0 to 1.5)
-  const effectiveVolumeFactor = isMuted ? 0 : playbackVolume / 100;
+  const effectiveVolumeFactor =
+    isMuted || (!isWindowFocused && !isLocalUser) ? 0 : playbackVolume / 100;
 
   // Calculate current stereo panning (-1.0 for Left to +1.0 for Right)
   const currentPan =
@@ -120,8 +127,13 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
       if (timestamp - lastSampleTimeRef.current >= 40) {
         lastSampleTimeRef.current = timestamp;
 
-        if (isBlocked || !isSpatialAudioEnabled || (isMuted && !isLocalUser)) {
-          // Flat silent baseline when sound is occluded by wall, muted by user, or spatial audio is off
+        if (
+          isBlocked ||
+          !isAudioActive ||
+          (isMuted && !isLocalUser) ||
+          (!isWindowFocused && !isLocalUser)
+        ) {
+          // Flat silent baseline when sound is occluded by wall, muted by user, window is unfocused, or spatial audio is off
           setDataPoints((prev) =>
             prev.map((pt) => ({ index: pt.index, value: 50 }))
           );
@@ -284,11 +296,15 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
     effectiveVolumeFactor,
     isMuted,
     isLocalUser,
+    isWindowFocused,
+    isAudioActive,
   ]);
 
   // Dynamic theme colors based on acoustic state
   const waveColor = isBlocked
     ? '#f43f5e' // Rose when wall blocked
+    : !isWindowFocused && !isLocalUser
+    ? '#f59e0b' // Amber when window lost focus
     : isMuted
     ? '#64748b' // Slate when muted by user
     : isSpeaking
@@ -300,6 +316,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
       className={`p-3 rounded-xl border transition-all duration-200 ${
         isBlocked
           ? 'bg-rose-950/20 border-rose-500/30'
+          : !isWindowFocused && !isLocalUser
+          ? 'bg-amber-950/15 border-amber-500/30'
           : isMuted
           ? 'bg-slate-900/60 border-slate-800/80 opacity-90'
           : isSpeaking
@@ -314,6 +332,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             className={`h-2.5 w-2.5 rounded-full transition-transform ${
               isBlocked
                 ? 'bg-rose-500'
+                : !isWindowFocused && !isLocalUser
+                ? 'bg-amber-400'
                 : isMuted
                 ? 'bg-slate-600'
                 : isSpeaking
@@ -335,16 +355,27 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${
               isBlocked
                 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                : !isWindowFocused && !isLocalUser
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                 : isMuted
                 ? 'bg-slate-800 text-slate-400 border border-slate-700'
                 : isSpeaking
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 : 'bg-slate-800 text-slate-400'
             }`}
+            title={
+              !isWindowFocused && !isLocalUser
+                ? 'Window is out of focus: spatial audio stream is automatically silenced until you return'
+                : undefined
+            }
           >
             {isBlocked ? (
               <>
                 <VolumeX className="h-2.5 w-2.5" /> Wall Muted
+              </>
+            ) : !isWindowFocused && !isLocalUser ? (
+              <>
+                <EyeOff className="h-2.5 w-2.5 text-amber-400" /> Focus Silenced
               </>
             ) : isMuted ? (
               <>
@@ -456,7 +487,9 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
               <span className="font-semibold text-slate-300">Level:</span>
               <span
                 className={`font-bold ${
-                  isMuted
+                  !isWindowFocused
+                    ? 'text-amber-400'
+                    : isMuted
                     ? 'text-rose-400'
                     : playbackVolume > 100
                     ? 'text-amber-400'
@@ -465,8 +498,12 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                     : 'text-slate-500'
                 }`}
               >
-                {isMuted ? 'Muted' : `${playbackVolume}%`}
-                {playbackVolume > 100 && !isMuted ? ' (Boost)' : ''}
+                {!isWindowFocused
+                  ? 'Silenced (Unfocused)'
+                  : isMuted
+                  ? 'Muted'
+                  : `${playbackVolume}%`}
+                {playbackVolume > 100 && !isMuted && isWindowFocused ? ' (Boost)' : ''}
               </span>
             </div>
 
@@ -506,9 +543,9 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             <div
               className="shrink-0 flex items-center gap-1 bg-slate-900/90 px-1.5 py-0.5 rounded-md border border-slate-800/90"
               title={`Instantaneous Peak: ${
-                instantDb <= -58 ? '-inf' : `${instantDb.toFixed(1)} dBFS`
+                !isWindowFocused || instantDb <= -58 ? '-inf' : `${instantDb.toFixed(1)} dBFS`
               } (Peak Hold: ${
-                peakHoldDb <= -58 ? '-inf' : `${peakHoldDb.toFixed(1)} dBFS`
+                !isWindowFocused || peakHoldDb <= -58 ? '-inf' : `${peakHoldDb.toFixed(1)} dBFS`
               })`}
             >
               {/* Vertical LED Bar Container */}
@@ -521,7 +558,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                 {/* Dynamic Instantaneous Peak Bar */}
                 <div
                   className={`w-full transition-all duration-75 ${
-                    isBlocked || (isMuted && !isLocalUser)
+                    isBlocked || !isWindowFocused || (isMuted && !isLocalUser)
                       ? 'bg-slate-700'
                       : instantDb > -6
                       ? 'bg-rose-500 shadow-sm shadow-rose-500/50'
@@ -535,20 +572,23 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                 />
 
                 {/* Peak Hold Tick Needle */}
-                {peakHoldPercent > 5 && !isBlocked && !(isMuted && !isLocalUser) && (
-                  <div
-                    className={`absolute left-0 right-0 h-0.5 z-20 transition-all duration-100 ${
-                      peakHoldDb > -6
-                        ? 'bg-rose-300'
-                        : peakHoldDb > -18
-                        ? 'bg-amber-200'
-                        : 'bg-emerald-200'
-                    }`}
-                    style={{
-                      bottom: `calc(${peakHoldPercent}% - 1px)`,
-                    }}
-                  />
-                )}
+                {peakHoldPercent > 5 &&
+                  !isBlocked &&
+                  isWindowFocused &&
+                  !(isMuted && !isLocalUser) && (
+                    <div
+                      className={`absolute left-0 right-0 h-0.5 z-20 transition-all duration-100 ${
+                        peakHoldDb > -6
+                          ? 'bg-rose-300'
+                          : peakHoldDb > -18
+                          ? 'bg-amber-200'
+                          : 'bg-emerald-200'
+                      }`}
+                      style={{
+                        bottom: `calc(${peakHoldPercent}% - 1px)`,
+                      }}
+                    />
+                  )}
               </div>
 
               {/* dB Numeric Readout */}
@@ -556,7 +596,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                 <span className="text-[7px] text-slate-500 font-mono leading-none">dBFS</span>
                 <span
                   className={`text-[8px] font-mono tabular-nums font-semibold leading-tight ${
-                    isBlocked || (isMuted && !isLocalUser) || instantDb <= -58
+                    isBlocked || !isWindowFocused || (isMuted && !isLocalUser) || instantDb <= -58
                       ? 'text-slate-600'
                       : instantDb > -6
                       ? 'text-rose-400 font-bold'
@@ -565,7 +605,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                       : 'text-emerald-400'
                   }`}
                 >
-                  {isBlocked || (isMuted && !isLocalUser) || instantDb <= -58
+                  {isBlocked || !isWindowFocused || (isMuted && !isLocalUser) || instantDb <= -58
                     ? '-inf'
                     : `${Math.round(instantDb)}`}
                 </span>
@@ -724,7 +764,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             <Gauge className="h-3 w-3 text-slate-500" />
             <span
               className={
-                isBlocked || isMuted || instantDb <= -58
+                isBlocked || !isWindowFocused || isMuted || instantDb <= -58
                   ? 'text-slate-500'
                   : instantDb > -6
                   ? 'text-rose-400 font-bold'
@@ -733,7 +773,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                   : 'text-emerald-400 font-semibold'
               }
             >
-              {isBlocked || isMuted || instantDb <= -58
+              {isBlocked || !isWindowFocused || isMuted || instantDb <= -58
                 ? '-inf dB'
                 : `${Math.round(instantDb)} dBFS`}
             </span>
@@ -745,8 +785,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             <Activity className="h-3 w-3 text-slate-500" />
             <strong
               className={
-                isBlocked || isMuted
-                  ? 'text-rose-400'
+                isBlocked || !isWindowFocused || isMuted
+                  ? 'text-slate-500'
                   : speakingVolume > 40
                   ? 'text-emerald-400'
                   : speakingVolume > 10
@@ -754,7 +794,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                   : 'text-slate-500'
               }
             >
-              {isMuted ? '0%' : `${speakingVolume}%`}
+              {!isWindowFocused ? 'Unfocused' : isMuted ? '0%' : `${speakingVolume}%`}
             </strong>
           </div>
         </div>

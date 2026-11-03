@@ -173,6 +173,10 @@ export default function App() {
   const [peerMuted, setPeerMuted] = useState<Record<string, boolean>>({});
   const peerPlaybackVolumesRef = useRef<Map<string, number>>(new Map());
   const peerMutedRef = useRef<Map<string, boolean>>(new Map());
+  const [isWindowFocused, setIsWindowFocused] = useState<boolean>(
+    typeof document !== 'undefined' ? !document.hidden : true
+  );
+  const isWindowFocusedRef = useRef<boolean>(true);
 
   // Automated simulated multi-peer bots
   const [simBots, setSimBots] = useState<SimulatedBot[]>([
@@ -273,6 +277,48 @@ export default function App() {
     setLogs((prev) => [entry, ...prev.slice(0, 59)]);
   }, []);
 
+  // Automatically silence spatial audio when window loses focus, re-enable when user returns
+  useEffect(() => {
+    const handleFocus = () => {
+      setIsWindowFocused(true);
+      isWindowFocusedRef.current = true;
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+      addLog('info', 'Window focused: Spatial audio resumed for active peers.');
+    };
+
+    const handleBlur = () => {
+      setIsWindowFocused(false);
+      isWindowFocusedRef.current = false;
+      // Immediately ramp down gain of all active peer audio nodes to 0
+      peerAudioNodesRef.current.forEach((node) => {
+        if (audioCtxRef.current) {
+          node.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.04);
+        }
+      });
+      addLog('info', 'Window unfocused: Automatically silenced all peer audio streams.');
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleBlur();
+      } else {
+        handleFocus();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [addLog]);
+
   // Web Audio spatial sound synthesizer setup
   const initSpatialAudioEngine = useCallback(() => {
     if (!audioCtxRef.current) {
@@ -327,12 +373,14 @@ export default function App() {
         }
       }
 
-      // Distance attenuation (0 to 100px) and individual peer playback level
+      // Distance attenuation (0 to 100px), individual peer playback level, and window focus factor
       const userVolSetting = peerMutedRef.current.get(peerId)
         ? 0
         : (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
+      const focusMultiplier = isWindowFocusedRef.current ? 1 : 0;
       const distanceFactor = Math.max(0, 1 - distance / 110);
-      const targetVolume = distanceFactor * occlusionTransmission * 0.12 * userVolSetting;
+      const targetVolume =
+        distanceFactor * occlusionTransmission * 0.12 * userVolSetting * focusMultiplier;
       const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
 
       const now = ctx.currentTime;
@@ -537,6 +585,15 @@ export default function App() {
       return;
     }
 
+    // Automatically silence peer playback when window loses focus
+    if (!isWindowFocused) {
+      peerAudioNodesRef.current.forEach((node) => {
+        if (audioCtxRef.current) {
+          node.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.04);
+        }
+      });
+    }
+
     initSpatialAudioEngine();
 
     const otherUsers = activeUsers.filter((u) => u.userId !== selectedUser.user.id);
@@ -590,6 +647,7 @@ export default function App() {
     updateSpatialAudio,
     silencePeerAudio,
     initSpatialAudioEngine,
+    isWindowFocused,
   ]);
 
   // Keep-Alive Heartbeat: Pings backend every 3 seconds so user presence & sound never expire
@@ -2163,9 +2221,26 @@ export default function App() {
                 <PhoneCall className="h-4 w-4 text-purple-400" />
                 Audio Channels & Occlusion
               </span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 font-mono">
-                {proximityPeers.length} in earshot
-              </span>
+              <div className="flex items-center gap-2">
+                {!isWindowFocused ? (
+                  <span
+                    className="text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono flex items-center gap-1"
+                    title="Window unfocused: Spatial audio automatically silenced until user returns"
+                  >
+                    <VolumeX className="h-3 w-3" /> Auto-Silenced
+                  </span>
+                ) : (
+                  <span
+                    className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono flex items-center gap-1"
+                    title="Window focused: Real-time spatial audio active"
+                  >
+                    <Volume2 className="h-3 w-3" /> Active
+                  </span>
+                )}
+                <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 font-mono">
+                  {proximityPeers.length} in earshot
+                </span>
+              </div>
             </h3>
 
             {/* Real-Time Waveform Visualizations using Web Audio API & Recharts */}
@@ -2244,6 +2319,7 @@ export default function App() {
                         isMuted={peerMuted[peer.userId] ?? false}
                         onPlaybackVolumeChange={(vol) => handlePeerVolumeChange(peer.userId, vol)}
                         onToggleMute={() => handleTogglePeerMute(peer.userId)}
+                        isWindowFocused={isWindowFocused}
                       />
                     );
                   })}
