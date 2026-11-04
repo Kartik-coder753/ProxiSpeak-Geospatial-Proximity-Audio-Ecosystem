@@ -5,6 +5,7 @@ import {
   MoveAvatarPayload,
   PresenceSnapshot,
   PresenceUser,
+  UserStatus,
 } from '../../shared/contracts/presence.types';
 import {
   IMembershipRepository,
@@ -161,6 +162,7 @@ export class PresenceService {
         officeId,
         position: initialPosition,
         isOnline: true,
+        status: 'online',
         joinedAt: Date.now(),
         lastSeenAt: Date.now(),
       };
@@ -395,6 +397,37 @@ export class PresenceService {
     return {
       success: true,
       position: validation.sanitizedPosition,
+    };
+  }
+
+  /**
+   * Update a user's presence status ('online' | 'busy' | 'away') across an office
+   */
+  async updateUserStatus(
+    userId: string,
+    officeId: string,
+    status: UserStatus
+  ): Promise<{ success: boolean; user?: PresenceUser; error?: string }> {
+    if (!['online', 'busy', 'away'].includes(status)) {
+      return { success: false, error: `Invalid status '${status}'. Must be online, busy, or away.` };
+    }
+
+    const officeMap = this.officePresences.get(officeId);
+    if (!officeMap) {
+      return { success: false, error: `Office '${officeId}' has no active presence records.` };
+    }
+
+    const member = officeMap.get(userId);
+    if (!member) {
+      return { success: false, error: `User '${userId}' is not present in office '${officeId}'.` };
+    }
+
+    member.status = status;
+    member.lastSeenAt = Date.now();
+
+    return {
+      success: true,
+      user: member,
     };
   }
 

@@ -2,6 +2,7 @@ import { ProximityPeer } from './proximity.interface';
 import { User } from './user.types';
 
 export type FacingDirection = 'up' | 'down' | 'left' | 'right';
+export type UserStatus = 'online' | 'busy' | 'away';
 
 export interface AvatarPosition {
   x: number;
@@ -17,6 +18,7 @@ export interface PresenceUser {
   officeId: string;
   position: AvatarPosition;
   isOnline: boolean;
+  status: UserStatus;
   joinedAt: number;
   lastSeenAt: number;
 }
@@ -64,6 +66,7 @@ export interface ServerToClientEvents {
   'presence:snapshot': (snapshot: PresenceSnapshot) => void;
   'presence:joined': (data: { officeId: string; member: PresenceUser }) => void;
   'presence:left': (data: { officeId: string; userId: string; reason?: string }) => void;
+  'presence:status_updated': (data: { officeId: string; userId: string; status: UserStatus }) => void;
   'avatar:moved': (data: { officeId: string; userId: string; position: AvatarPosition }) => void;
   'avatar:move_rejected': (data: { officeId: string; reason: string; code: string; currentPosition: AvatarPosition }) => void;
   'proximity:update': (data: { officeId: string; peers: ProximityPeer[] }) => void;
@@ -83,6 +86,10 @@ export interface ClientToServerEvents {
   'office:leave': (
     payload: { officeId: string },
     callback?: (response: { success: boolean; error?: string }) => void
+  ) => void;
+  'presence:update_status': (
+    payload: { officeId?: string; status: UserStatus },
+    callback?: (response: { success: boolean; error?: string; status?: UserStatus }) => void
   ) => void;
   'avatar:move': (
     payload: MoveAvatarPayload,

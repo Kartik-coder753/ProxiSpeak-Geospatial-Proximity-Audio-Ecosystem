@@ -108,4 +108,31 @@ describe('PresenceService Unit Tests', () => {
     const sigEvents = signalingService.getDisconnectedEvents();
     expect(sigEvents.some((e) => e.userId === 'user-alice')).toBe(true);
   });
+
+  it('initializes user with online status and syncs status updates', async () => {
+    const alice = (await repos.userRepo.findById('user-alice'))!;
+    presenceService.registerSocketConnection('socket-alice-1', alice);
+    const joinRes = await presenceService.joinOffice('socket-alice-1', alice, 'infotact-office');
+    
+    expect(joinRes.member?.status).toBe('online');
+
+    // Update status to busy
+    const busyRes = await presenceService.updateUserStatus('user-alice', 'infotact-office', 'busy');
+    expect(busyRes.success).toBe(true);
+    expect(busyRes.user?.status).toBe('busy');
+
+    // Verify snapshot reflects updated status
+    const snap = presenceService.getOfficeSnapshot('infotact-office');
+    const member = snap.members.find((m) => m.userId === 'user-alice');
+    expect(member?.status).toBe('busy');
+
+    // Update status to away
+    const awayRes = await presenceService.updateUserStatus('user-alice', 'infotact-office', 'away');
+    expect(awayRes.success).toBe(true);
+    expect(awayRes.user?.status).toBe('away');
+
+    // Reject invalid status
+    const invalidRes = await presenceService.updateUserStatus('user-alice', 'infotact-office', 'invisible' as any);
+    expect(invalidRes.success).toBe(false);
+  });
 });

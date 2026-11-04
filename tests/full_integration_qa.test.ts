@@ -166,4 +166,44 @@ describe('ProxiSpeak Master Cross-Module Integration QA Suite (Person 4)', () =>
 
     bobSocket.disconnect();
   });
+
+  it('syncs user status changes (online/busy/away) across peers in real time', async () => {
+    const aliceSocket: ClientTyped = ClientSocket(`http://127.0.0.1:${serverPort}`, {
+      auth: { token: 'token-alice' },
+      transports: ['websocket'],
+    });
+
+    const bobSocket: ClientTyped = ClientSocket(`http://127.0.0.1:${serverPort}`, {
+      auth: { token: 'token-bob' },
+      transports: ['websocket'],
+    });
+
+    await Promise.all([
+      new Promise<void>((r) => aliceSocket.on('connect', r)),
+      new Promise<void>((r) => bobSocket.on('connect', r)),
+    ]);
+
+    await new Promise((r) => aliceSocket.emit('office:join', { officeId: 'infotact-office' }, r));
+    await new Promise((r) => bobSocket.emit('office:join', { officeId: 'infotact-office' }, r));
+
+    // Bob listens for Alice's status update to 'busy'
+    const statusPromise = new Promise<{ officeId: string; userId: string; status: string }>((resolve) => {
+      bobSocket.on('presence:status_updated', (data) => {
+        if (data.userId === 'user-alice') resolve(data);
+      });
+    });
+
+    // Alice updates status to 'busy'
+    const updateRes = await new Promise<{ success: boolean; status?: string }>((resolve) => {
+      aliceSocket.emit('presence:update_status', { officeId: 'infotact-office', status: 'busy' }, resolve);
+    });
+    expect(updateRes.success).toBe(true);
+
+    const received = await statusPromise;
+    expect(received.userId).toBe('user-alice');
+    expect(received.status).toBe('busy');
+
+    aliceSocket.disconnect();
+    bobSocket.disconnect();
+  });
 });

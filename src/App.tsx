@@ -48,6 +48,7 @@ import {
   FacingDirection,
   PresenceSnapshot,
   PresenceUser,
+  UserStatus,
   ServerToClientEvents,
   ClientToServerEvents,
 } from './shared/contracts/presence.types';
@@ -97,6 +98,7 @@ interface SimulatedBot {
   color: string;
   active: boolean;
   patrolActive: boolean;
+  status?: UserStatus;
   position: { x: number; y: number };
   waypoints: Array<{ x: number; y: number }>;
   currentWaypointIndex: number;
@@ -124,6 +126,7 @@ export default function App() {
   const [inOffice, setInOffice] = useState(false);
   const [currentOffice, setCurrentOffice] = useState<Office | null>(null);
   const [activeUsers, setActiveUsers] = useState<PresenceUser[]>([]);
+  const [myStatus, setMyStatus] = useState<UserStatus>('online');
   const [myPosition, setMyPosition] = useState<AvatarPosition>({
     x: 200,
     y: 200,
@@ -750,6 +753,16 @@ export default function App() {
         closePeerConnection(data.userId, 'user left office');
       });
 
+      s.on('presence:status_updated', (data) => {
+        addLog('info', `Status update: User ${data.userId} is now ${data.status.toUpperCase()}`);
+        setActiveUsers((prev) =>
+          prev.map((u) => (u.userId === data.userId ? { ...u, status: data.status } : u))
+        );
+        if (data.userId === account.user.id) {
+          setMyStatus(data.status);
+        }
+      });
+
       s.on('avatar:moved', (data) => {
         setActiveUsers((prev) =>
           prev.map((u) => (u.userId === data.userId ? { ...u, position: data.position } : u))
@@ -995,6 +1008,7 @@ export default function App() {
             );
             if (self) {
               setMyPosition(self.position);
+              if (self.status) setMyStatus(self.status);
               sequenceRef.current = self.position.sequence + 1;
             }
           }
@@ -1002,6 +1016,32 @@ export default function App() {
       );
     },
     [connected, refreshOfficeLayout, selectedUser, addLog]
+  );
+
+  // Update presence status ('online' | 'busy' | 'away')
+  const handleUpdateStatus = useCallback(
+    (newStatus: UserStatus) => {
+      setMyStatus(newStatus);
+      if (selectedUser) {
+        setActiveUsers((prev) =>
+          prev.map((u) => (u.userId === selectedUser.user.id ? { ...u, status: newStatus } : u))
+        );
+      }
+      if (socketRef.current && inOffice) {
+        socketRef.current.emit(
+          'presence:update_status',
+          { officeId: selectedOfficeId, status: newStatus },
+          (res) => {
+            if (res.success) {
+              addLog('success', `Status updated to ${newStatus.toUpperCase()}`);
+            } else {
+              addLog('error', `Failed to update status: ${res.error}`);
+            }
+          }
+        );
+      }
+    },
+    [selectedUser, inOffice, selectedOfficeId, addLog]
   );
 
   const handleLeaveOffice = useCallback(() => {
@@ -1359,6 +1399,27 @@ export default function App() {
     );
   }, []);
 
+  // Cycle bot presence status ('online' -> 'busy' -> 'away' -> 'online')
+  const cycleBotStatus = useCallback((userId: string) => {
+    const bot = simBots.find((b) => b.userId === userId);
+    if (!bot || !bot.active) return;
+    const sock = botSocketsRef.current.get(userId);
+    if (!sock) return;
+
+    const currentStatus = bot.status || 'online';
+    const nextStatus: UserStatus =
+      currentStatus === 'online' ? 'busy' : currentStatus === 'busy' ? 'away' : 'online';
+
+    sock.emit('presence:update_status', { officeId: selectedOfficeId, status: nextStatus }, (res) => {
+      if (res.success) {
+        setSimBots((prev) =>
+          prev.map((b) => (b.userId === userId ? { ...b, status: nextStatus } : b))
+        );
+        addLog('info', `Bot ${bot.displayName} status changed to ${nextStatus.toUpperCase()}`);
+      }
+    });
+  }, [simBots, selectedOfficeId, addLog]);
+
   // Bot patrol movement ticker
   useEffect(() => {
     const patrolInterval = setInterval(() => {
@@ -1541,6 +1602,32 @@ export default function App() {
             <span>{micActive ? 'Mic Active' : 'Enable Mic'}</span>
           </button>
 
+          {/* Presence Status Selector */}
+          <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-lg border border-slate-700">
+            <span className="text-[10px] text-slate-400 font-mono px-1">Status:</span>
+            {(
+              [
+                { id: 'online', label: 'Online', color: 'bg-emerald-400', activeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
+                { id: 'busy', label: 'Busy', color: 'bg-rose-400', activeClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
+                { id: 'away', label: 'Away', color: 'bg-amber-400', activeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+              ] as const
+            ).map((st) => (
+              <button
+                key={st.id}
+                onClick={() => handleUpdateStatus(st.id)}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium border transition ${
+                  myStatus === st.id
+                    ? `${st.activeClass} font-semibold`
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                }`}
+                title={`Set status to ${st.label}`}
+              >
+                <span className={`h-2 w-2 rounded-full ${st.color} ${myStatus === st.id ? 'animate-pulse' : ''}`} />
+                <span>{st.label}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 font-mono">
             <ServerIcon className="h-3.5 w-3.5 text-emerald-400" />
             <span className="text-slate-400">API:</span>
@@ -1618,14 +1705,31 @@ export default function App() {
                   >
                     <div className="flex items-center gap-2.5">
                       <div
-                        className="relative h-8 w-8 rounded-full border flex items-center justify-center overflow-hidden shrink-0"
+                        className="relative h-8 w-8 rounded-full border flex items-center justify-center overflow-visible shrink-0"
                         style={{ borderColor: userTheme }}
                       >
                         <img
                           src={acc.user.avatarUrl}
                           alt={acc.user.displayName}
-                          className="h-full w-full object-cover"
+                          className="h-full w-full rounded-full object-cover"
                         />
+                        {(() => {
+                          const userPresence = activeUsers.find((u) => u.userId === acc.user.id);
+                          const status = isSelected
+                            ? myStatus
+                            : userPresence?.status || (userPresence?.isOnline ? 'online' : 'offline');
+                          let dotColor = 'bg-slate-600';
+                          if (status === 'online') dotColor = 'bg-emerald-400 ring-2 ring-slate-900';
+                          if (status === 'busy') dotColor = 'bg-rose-500 ring-2 ring-slate-900';
+                          if (status === 'away') dotColor = 'bg-amber-400 ring-2 ring-slate-900';
+
+                          return (
+                            <span
+                              className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ${dotColor}`}
+                              title={`Status: ${status}`}
+                            />
+                          );
+                        })()}
                       </div>
                       <div className="min-w-0">
                         <div className="font-semibold text-slate-100 flex items-center gap-1.5 truncate">
@@ -1810,18 +1914,43 @@ export default function App() {
                     </button>
 
                     {bot.active && (
-                      <button
-                        onClick={() => toggleBotPatrol(bot.userId)}
-                        className={`py-1 px-2.5 rounded text-[11px] font-semibold border transition flex items-center gap-1 ${
-                          bot.patrolActive
-                            ? 'bg-amber-600/20 border-amber-500/40 text-amber-300'
-                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-                        }`}
-                        title="Autonomous walking through proximity zone and behind walls"
-                      >
-                        {bot.patrolActive ? <Square className="h-3 w-3 text-amber-400" /> : <Play className="h-3 w-3 text-emerald-400" />}
-                        <span>Patrol</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => toggleBotPatrol(bot.userId)}
+                          className={`py-1 px-2.5 rounded text-[11px] font-semibold border transition flex items-center gap-1 ${
+                            bot.patrolActive
+                              ? 'bg-amber-600/20 border-amber-500/40 text-amber-300'
+                              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Autonomous walking through proximity zone and behind walls"
+                        >
+                          {bot.patrolActive ? <Square className="h-3 w-3 text-amber-400" /> : <Play className="h-3 w-3 text-emerald-400" />}
+                          <span>Patrol</span>
+                        </button>
+
+                        <button
+                          onClick={() => cycleBotStatus(bot.userId)}
+                          className={`py-1 px-2 rounded text-[10px] font-mono font-semibold border transition flex items-center gap-1 ${
+                            (bot.status || 'online') === 'busy'
+                              ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                              : (bot.status || 'online') === 'away'
+                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                              : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                          }`}
+                          title="Click to toggle bot status (Online / Busy / Away)"
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              (bot.status || 'online') === 'busy'
+                                ? 'bg-rose-400'
+                                : (bot.status || 'online') === 'away'
+                                ? 'bg-amber-400'
+                                : 'bg-emerald-400'
+                            }`}
+                          />
+                          <span>{(bot.status || 'online').toUpperCase()}</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -2047,6 +2176,7 @@ export default function App() {
                     officeId: selectedOfficeId,
                     position: myPosition,
                     isOnline: true,
+                    status: myStatus,
                     joinedAt: Date.now(),
                     lastSeenAt: Date.now(),
                   });
@@ -2080,37 +2210,67 @@ export default function App() {
                         top: `${topPct}%`,
                       }}
                     >
-                      {/* Avatar Ring */}
-                      <div
-                        className={`h-9 w-9 rounded-full border-2 flex items-center justify-center shadow-xl transition-transform ${
-                          isMe
-                            ? 'ring-4 ring-indigo-500/40 scale-110'
-                            : isPeer
-                            ? soundOcclusion?.isBlocked
-                              ? 'ring-4 ring-rose-500/50'
-                              : 'ring-4 ring-emerald-500/50 animate-pulse'
-                            : 'opacity-80'
-                        }`}
-                        style={{
-                          backgroundColor: `${avatarColor}33`,
-                          borderColor: avatarColor,
-                        }}
-                      >
-                        <img
-                          src={member.user.avatarUrl}
-                          alt={member.user.displayName}
-                          className="h-7 w-7 rounded-full object-cover"
-                        />
+                      {/* Avatar Ring with Status Indicator Dot */}
+                      <div className="relative">
+                        <div
+                          className={`h-9 w-9 rounded-full border-2 flex items-center justify-center shadow-xl transition-transform ${
+                            isMe
+                              ? 'ring-4 ring-indigo-500/40 scale-110'
+                              : isPeer
+                              ? soundOcclusion?.isBlocked
+                                ? 'ring-4 ring-rose-500/50'
+                                : 'ring-4 ring-emerald-500/50 animate-pulse'
+                              : 'opacity-80'
+                          }`}
+                          style={{
+                            backgroundColor: `${avatarColor}33`,
+                            borderColor: avatarColor,
+                          }}
+                        >
+                          <img
+                            src={member.user.avatarUrl}
+                            alt={member.user.displayName}
+                            className="h-7 w-7 rounded-full object-cover"
+                          />
+                        </div>
+                        {/* Status Indicator Dot */}
+                        {(() => {
+                          const status = isMe ? myStatus : (member.status || 'online');
+                          let statusColor = 'bg-emerald-400';
+                          if (status === 'busy') statusColor = 'bg-rose-500';
+                          if (status === 'away') statusColor = 'bg-amber-400';
+                          return (
+                            <span
+                              className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-900 ${statusColor}`}
+                              title={`Status: ${status}`}
+                            />
+                          );
+                        })()}
                       </div>
 
                       {/* Name Badge */}
                       <div className="mt-1 px-1.5 py-0.5 rounded-md bg-slate-900/95 border border-slate-700/80 text-[10px] font-semibold text-white whitespace-nowrap shadow-md flex items-center gap-1">
+                        {(() => {
+                          const status = isMe ? myStatus : (member.status || 'online');
+                          let dotColor = 'bg-emerald-400';
+                          if (status === 'busy') dotColor = 'bg-rose-500';
+                          if (status === 'away') dotColor = 'bg-amber-400';
+                          return <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />;
+                        })()}
                         {soundOcclusion?.isBlocked ? (
                           <VolumeX className="h-2.5 w-2.5 text-rose-400" />
                         ) : isPeer ? (
                           <Volume2 className="h-2.5 w-2.5 text-emerald-400" />
                         ) : null}
                         <span>{member.user.displayName} {isMe ? '(You)' : ''}</span>
+                        {(() => {
+                          const status = isMe ? myStatus : (member.status || 'online');
+                          if (status !== 'online') {
+                            const badgeColor = status === 'busy' ? 'text-rose-400' : 'text-amber-400';
+                            return <span className={`text-[8px] font-mono uppercase ${badgeColor}`}>({status})</span>;
+                          }
+                          return null;
+                        })()}
                         {soundOcclusion && (() => {
                           const liveDist = Math.round(Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y));
                           const distanceFactor = Math.max(0, 1 - liveDist / (proximityConfig.exitRadius || 110));

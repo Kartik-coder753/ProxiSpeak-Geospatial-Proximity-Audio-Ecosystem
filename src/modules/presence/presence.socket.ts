@@ -160,6 +160,32 @@ export function registerPresenceHandlers(
       });
     });
 
+    // Event: presence:update_status
+    socket.on('presence:update_status', async (payload, callback) => {
+      const officeId = payload.officeId || socket.data.officeId;
+      if (!officeId) {
+        if (callback) callback({ success: false, error: 'No active office specified' });
+        return;
+      }
+
+      const result = await presenceService.updateUserStatus(user.id, officeId, payload.status);
+      if (!result.success) {
+        if (callback) callback({ success: false, error: result.error });
+        return;
+      }
+
+      if (callback) {
+        callback({ success: true, status: payload.status });
+      }
+
+      // Broadcast new status to everyone in the office room including requester
+      io.to(`office:${officeId}`).emit('presence:status_updated', {
+        officeId,
+        userId: user.id,
+        status: payload.status,
+      });
+    });
+
     // Event: office:leave
     socket.on('office:leave', async (payload, callback) => {
       const officeId = payload.officeId || socket.data.officeId;
