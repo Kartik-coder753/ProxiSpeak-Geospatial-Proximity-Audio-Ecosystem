@@ -41,6 +41,8 @@ import {
   ArrowDown,
   ArrowLeft,
   Gauge,
+  HelpCircle,
+  X,
 } from 'lucide-react';
 import { Office, Obstacle, SoundOcclusionResult } from './shared/contracts/office.types';
 import {
@@ -136,6 +138,7 @@ export default function App() {
   });
   const [lastError, setLastError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isLegendOpen, setIsLegendOpen] = useState<boolean>(false);
 
   // Proximity & Peer Eligibility state (Person 2)
   const [proximityPeers, setProximityPeers] = useState<ProximityPeer[]>([]);
@@ -321,6 +324,17 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [addLog]);
+
+  // Handle Escape key to close Legend modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isLegendOpen) {
+        setIsLegendOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLegendOpen]);
 
   // Web Audio spatial sound synthesizer setup
   const initSpatialAudioEngine = useCallback(() => {
@@ -1641,6 +1655,19 @@ export default function App() {
               {connected ? 'Active' : 'Offline'}
             </span>
           </div>
+
+          <button
+            onClick={() => setIsLegendOpen((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium transition ${
+              isLegendOpen
+                ? 'bg-indigo-600/30 border-indigo-500 text-indigo-300 ring-2 ring-indigo-500/20'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+            title="Open UI Legend & Status Guide"
+          >
+            <HelpCircle className="h-3.5 w-3.5 text-indigo-400" />
+            <span>Guide & Legend</span>
+          </button>
         </div>
       </header>
 
@@ -2306,6 +2333,14 @@ export default function App() {
                 <span className="flex items-center gap-1">
                   <span className="h-2.5 w-2.5 rounded bg-rose-500 inline-block" /> Soundproof Partition Wall
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setIsLegendOpen((prev) => !prev)}
+                  className="flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition underline underline-offset-2 ml-1"
+                >
+                  <Info className="h-3 w-3" />
+                  <span>Avatar & Status Legend</span>
+                </button>
               </div>
               <div className="flex items-center gap-3">
                 <div className="text-[11px] font-mono text-slate-400 hidden sm:block">
@@ -2556,6 +2591,196 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Legend & UI Guide Modal */}
+      {isLegendOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="UI Legend and Status Guide"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setIsLegendOpen(false)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl p-6 text-slate-200 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                  <HelpCircle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                    ProxiSpeak UI & Status Guide
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Understanding presence status indicators, avatar rings, audio zones, and raycasts
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLegendOpen(false)}
+                className="h-8 w-8 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition border border-slate-700"
+                title="Close modal (Esc)"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Modal Content Sections */}
+            <div className="py-4 space-y-6 text-xs">
+              {/* 1. User Presence Status Colors */}
+              <div>
+                <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                  1. Presence Status Indicators
+                </h3>
+                <p className="text-slate-400 mb-3 text-[11px] leading-relaxed">
+                  Every avatar on the canvas, roster card, and header displays a real-time status dot indicating peer availability:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
+                      <span className="font-semibold text-emerald-300">Online</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      User is active, connected to the office room, and ready for proximity voice chat.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50" />
+                      <span className="font-semibold text-rose-300">Busy (DND)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      User is in a meeting, focused on deep work, or requests minimal interruption.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50" />
+                      <span className="font-semibold text-amber-300">Away</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      User has stepped away from their workstation or desk temporarily.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Avatar Rings on Office Canvas */}
+              <div>
+                <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                  2. Avatar Ring States
+                </h3>
+                <p className="text-slate-400 mb-3 text-[11px] leading-relaxed">
+                  The colored ring surrounding an avatar indicates their proximity and acoustic state relative to your character:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-start gap-3">
+                    <div className="h-9 w-9 rounded-full border-2 border-indigo-400 bg-indigo-500/20 ring-4 ring-indigo-500/40 flex items-center justify-center shrink-0">
+                      <span className="text-[10px] font-bold text-indigo-200">You</span>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-indigo-300 text-xs">Your Avatar (Local)</div>
+                      <p className="text-[11px] text-slate-400 mt-0.5 leading-normal">
+                        Indigo ring highlighting your current position. Moves via WASD, arrow keys, or clicking the map.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-start gap-3">
+                    <div className="h-9 w-9 rounded-full border-2 border-emerald-400 bg-emerald-500/20 ring-4 ring-emerald-500/50 animate-pulse flex items-center justify-center shrink-0">
+                      <Volume2 className="h-4 w-4 text-emerald-300" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-emerald-300 text-xs">In Earshot & Audible</div>
+                      <p className="text-[11px] text-slate-400 mt-0.5 leading-normal">
+                        Pulsing green ring. Peer is within the 100px proximity radius with clear acoustic line-of-sight.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-start gap-3">
+                    <div className="h-9 w-9 rounded-full border-2 border-rose-400 bg-rose-500/20 ring-4 ring-rose-500/50 flex items-center justify-center shrink-0">
+                      <VolumeX className="h-4 w-4 text-rose-300" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-rose-300 text-xs">Occluded by Soundproof Wall</div>
+                      <p className="text-[11px] text-slate-400 mt-0.5 leading-normal">
+                        Solid rose ring. Peer is within distance, but audio is blocked (0% transmission) by acoustic wall partitions.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-start gap-3">
+                    <div className="h-9 w-9 rounded-full border border-slate-600 bg-slate-800/50 opacity-70 flex items-center justify-center shrink-0">
+                      <PhoneOff className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-slate-400 text-xs">Out of Range (&gt; 110px)</div>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-normal">
+                        Subtle border without glowing rings. Peer is beyond hearing range; audio is silenced to save bandwidth.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Acoustic Boundaries & Occlusion Raycasts */}
+              <div>
+                <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                  3. Geospatial Circles & Raycasts
+                </h3>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shrink-0" />
+                    <span className="text-slate-300 font-semibold">Solid Green Circle (100px):</span>
+                    <span className="text-slate-400">Entry threshold for proximity audio eligibility.</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="h-2.5 w-2.5 rounded-full border border-dashed border-amber-400 shrink-0" />
+                    <span className="text-slate-300 font-semibold">Dashed Amber Circle (110px):</span>
+                    <span className="text-slate-400">Hysteresis exit threshold preventing rapid connection flutter.</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="h-1.5 w-5 bg-rose-500 rounded shrink-0" />
+                    <span className="text-slate-300 font-semibold">Dashed Red Line:</span>
+                    <span className="text-slate-400">Raycast ray blocked by soundproof wall partition (attenuation = 0).</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="h-1.5 w-5 bg-emerald-500 rounded shrink-0" />
+                    <span className="text-slate-300 font-semibold">Solid Green Line:</span>
+                    <span className="text-slate-400">Unobstructed line-of-sight for direct WebRTC & spatial audio.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="mt-4 pt-4 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500 font-mono">
+                Click anywhere outside or press Esc to close
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsLegendOpen(false)}
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition"
+              >
+                Got It
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
