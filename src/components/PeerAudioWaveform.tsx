@@ -44,6 +44,7 @@ export interface PeerAudioWaveformProps {
   pan?: number; // -1.0 (hard left) to +1.0 (hard right)
   relativeX?: number; // pixel offset from local user
   isWindowFocused?: boolean;
+  isMasterMuted?: boolean;
 }
 
 /**
@@ -68,6 +69,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   pan,
   relativeX,
   isWindowFocused = true,
+  isMasterMuted = false,
 }) => {
   const [chartMode, setChartMode] = useState<'wave' | 'spectrum'>('wave');
   const [dataPoints, setDataPoints] = useState<WaveformDataPoint[]>(() =>
@@ -87,12 +89,12 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   // Unique SVG gradient IDs to prevent collisions between multiple peers
   const gradientId = useId().replace(/:/g, '');
 
-  // Is audio active considering window focus for remote peers
-  const isAudioActive = isSpatialAudioEnabled && (isLocalUser || isWindowFocused);
+  // Is audio active considering window focus and master mute for remote peers
+  const isAudioActive = isSpatialAudioEnabled && (isLocalUser || (isWindowFocused && !isMasterMuted));
 
   // Effective volume factor (0.0 to 1.5)
   const effectiveVolumeFactor =
-    isMuted || (!isWindowFocused && !isLocalUser) ? 0 : playbackVolume / 100;
+    isMuted || (isMasterMuted && !isLocalUser) || (!isWindowFocused && !isLocalUser) ? 0 : playbackVolume / 100;
 
   // Calculate current stereo panning (-1.0 for Left to +1.0 for Right)
   const currentPan =
@@ -131,9 +133,10 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
           isBlocked ||
           !isAudioActive ||
           (isMuted && !isLocalUser) ||
+          (isMasterMuted && !isLocalUser) ||
           (!isWindowFocused && !isLocalUser)
         ) {
-          // Flat silent baseline when sound is occluded by wall, muted by user, window is unfocused, or spatial audio is off
+          // Flat silent baseline when sound is occluded by wall, muted by user, window is unfocused, master muted, or spatial audio is off
           setDataPoints((prev) =>
             prev.map((pt) => ({ index: pt.index, value: 50 }))
           );
@@ -297,12 +300,15 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
     isMuted,
     isLocalUser,
     isWindowFocused,
+    isMasterMuted,
     isAudioActive,
   ]);
 
   // Dynamic theme colors based on acoustic state
   const waveColor = isBlocked
     ? '#f43f5e' // Rose when wall blocked
+    : isMasterMuted && !isLocalUser
+    ? '#f43f5e' // Rose when master muted
     : !isWindowFocused && !isLocalUser
     ? '#f59e0b' // Amber when window lost focus
     : isMuted
@@ -316,6 +322,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
       className={`p-3 rounded-xl border transition-all duration-200 ${
         isBlocked
           ? 'bg-rose-950/20 border-rose-500/30'
+          : isMasterMuted && !isLocalUser
+          ? 'bg-rose-950/15 border-rose-500/30'
           : !isWindowFocused && !isLocalUser
           ? 'bg-amber-950/15 border-amber-500/30'
           : isMuted
@@ -332,6 +340,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             className={`h-2.5 w-2.5 rounded-full transition-transform ${
               isBlocked
                 ? 'bg-rose-500'
+                : isMasterMuted && !isLocalUser
+                ? 'bg-rose-400'
                 : !isWindowFocused && !isLocalUser
                 ? 'bg-amber-400'
                 : isMuted
@@ -355,6 +365,8 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             className={`text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${
               isBlocked
                 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                : isMasterMuted && !isLocalUser
+                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                 : !isWindowFocused && !isLocalUser
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                 : isMuted
@@ -364,7 +376,9 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
                 : 'bg-slate-800 text-slate-400'
             }`}
             title={
-              !isWindowFocused && !isLocalUser
+              isMasterMuted && !isLocalUser
+                ? 'Master Mute is enabled: All incoming peer audio is silenced'
+                : !isWindowFocused && !isLocalUser
                 ? 'Window is out of focus: spatial audio stream is automatically silenced until you return'
                 : undefined
             }
@@ -372,6 +386,10 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             {isBlocked ? (
               <>
                 <VolumeX className="h-2.5 w-2.5" /> Wall Muted
+              </>
+            ) : isMasterMuted && !isLocalUser ? (
+              <>
+                <VolumeX className="h-2.5 w-2.5 text-rose-400" /> Master Muted
               </>
             ) : !isWindowFocused && !isLocalUser ? (
               <>

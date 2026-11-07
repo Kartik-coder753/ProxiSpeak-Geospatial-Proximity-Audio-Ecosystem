@@ -179,6 +179,8 @@ export default function App() {
   const [peerMuted, setPeerMuted] = useState<Record<string, boolean>>({});
   const peerPlaybackVolumesRef = useRef<Map<string, number>>(new Map());
   const peerMutedRef = useRef<Map<string, boolean>>(new Map());
+  const [isMasterMuted, setIsMasterMuted] = useState<boolean>(false);
+  const isMasterMutedRef = useRef<boolean>(false);
   const [isWindowFocused, setIsWindowFocused] = useState<boolean>(
     typeof document !== 'undefined' ? !document.hidden : true
   );
@@ -390,14 +392,15 @@ export default function App() {
         }
       }
 
-      // Distance attenuation (0 to 100px), individual peer playback level, and window focus factor
+      // Distance attenuation (0 to 100px), individual peer playback level, master mute, and window focus factor
       const userVolSetting = peerMutedRef.current.get(peerId)
         ? 0
         : (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
+      const masterMuteMultiplier = isMasterMutedRef.current ? 0 : 1;
       const focusMultiplier = isWindowFocusedRef.current ? 1 : 0;
       const distanceFactor = Math.max(0, 1 - distance / 110);
       const targetVolume =
-        distanceFactor * occlusionTransmission * 0.12 * userVolSetting * focusMultiplier;
+        distanceFactor * occlusionTransmission * 0.12 * userVolSetting * masterMuteMultiplier * focusMultiplier;
       const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
 
       const now = ctx.currentTime;
@@ -414,6 +417,50 @@ export default function App() {
     }
   }, []);
 
+  // Master Mute All toggle handler
+  const handleToggleMasterMute = useCallback(() => {
+    const nextMasterMuted = !isMasterMutedRef.current;
+    isMasterMutedRef.current = nextMasterMuted;
+    setIsMasterMuted(nextMasterMuted);
+
+    if (nextMasterMuted) {
+      // Immediately ramp gain of all existing peer audio nodes to 0
+      peerAudioNodesRef.current.forEach((node) => {
+        if (audioCtxRef.current) {
+          node.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.03);
+        }
+      });
+      addLog('warn', 'Master Mute enabled: All peer audio streams muted (persisting for new peers).');
+    } else {
+      // Restore peer audio levels based on current distance, occlusion, volume settings
+      if (audioCtxRef.current && currentOffice) {
+        const now = audioCtxRef.current.currentTime;
+        peerAudioNodesRef.current.forEach((node, peerId) => {
+          const isIndividuallyMuted = !!peerMutedRef.current.get(peerId);
+          if (isIndividuallyMuted) {
+            node.gain.gain.setTargetAtTime(0, now, 0.03);
+            return;
+          }
+          const member = activeUsers.find((u) => u.userId === peerId);
+          if (member) {
+            const dist = Math.hypot(member.position.x - myPosition.x, member.position.y - myPosition.y);
+            const distanceFactor = Math.max(0, 1 - dist / 110);
+            const occlusion = clientGeometry.checkSoundObstruction(
+              { x: myPosition.x, y: myPosition.y },
+              { x: member.position.x, y: member.position.y },
+              currentOffice.obstacles
+            );
+            const volSetting = (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
+            const focusMultiplier = isWindowFocusedRef.current ? 1 : 0;
+            const targetVol = distanceFactor * occlusion.totalTransmission * 0.12 * volSetting * focusMultiplier;
+            node.gain.gain.setTargetAtTime(targetVol, now, 0.03);
+          }
+        });
+      }
+      addLog('info', 'Master Mute disabled: Restored peer audio streams.');
+    }
+  }, [activeUsers, currentOffice, myPosition, addLog]);
+
   // Individual peer volume control handler
   const handlePeerVolumeChange = useCallback(
     (peerId: string, volume: number) => {
@@ -428,6 +475,10 @@ export default function App() {
       // Immediately apply to Web Audio gain node
       const nodes = peerAudioNodesRef.current.get(peerId);
       if (nodes && audioCtxRef.current) {
+        if (isMasterMutedRef.current) {
+          nodes.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.03);
+          return;
+        }
         const isMuted = volume === 0 || !!peerMutedRef.current.get(peerId);
         const volMultiplier = isMuted ? 0 : volume / 100;
         const member = activeUsers.find((u) => u.userId === peerId);
@@ -455,7 +506,7 @@ export default function App() {
 
       const nodes = peerAudioNodesRef.current.get(peerId);
       if (nodes && audioCtxRef.current) {
-        if (nextMuted) {
+        if (isMasterMutedRef.current || nextMuted) {
           nodes.gain.gain.setTargetAtTime(0, audioCtxRef.current.currentTime, 0.03);
         } else {
           const volMultiplier = (peerPlaybackVolumesRef.current.get(peerId) ?? 100) / 100;
@@ -665,6 +716,7 @@ export default function App() {
     silencePeerAudio,
     initSpatialAudioEngine,
     isWindowFocused,
+    isMasterMuted,
   ]);
 
   // Keep-Alive Heartbeat: Pings backend every 3 seconds so user presence & sound never expire
@@ -839,6 +891,9 @@ export default function App() {
           addLog('success', `Received audio stream from peer ${data.peerUserId}`);
           const remoteAudio = new Audio();
           remoteAudio.srcObject = event.streams[0];
+          if (isMasterMutedRef.current || peerMutedRef.current.get(data.peerUserId)) {
+            remoteAudio.muted = true;
+          }
           remoteAudio.play().catch(() => {});
           setPeerConnections((prev) => ({
             ...prev,
@@ -1614,6 +1669,28 @@ export default function App() {
           >
             {micActive ? <Mic className="h-3.5 w-3.5 text-emerald-400" /> : <MicOff className="h-3.5 w-3.5 text-slate-400" />}
             <span>{micActive ? 'Mic Active' : 'Enable Mic'}</span>
+          </button>
+
+          {/* Master Mute All Toggle Button */}
+          <button
+            onClick={handleToggleMasterMute}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium transition ${
+              isMasterMuted
+                ? 'bg-rose-600/20 border-rose-500/50 text-rose-300 ring-2 ring-rose-500/20 hover:bg-rose-600/30'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+            title={
+              isMasterMuted
+                ? 'Master Mute is ON: All peer audio is muted (Click to Unmute All)'
+                : 'Master Mute: Silence all incoming peer audio streams'
+            }
+          >
+            {isMasterMuted ? (
+              <VolumeX className="h-3.5 w-3.5 text-rose-400 animate-pulse" />
+            ) : (
+              <Volume2 className="h-3.5 w-3.5 text-slate-400" />
+            )}
+            <span>{isMasterMuted ? 'Muted All' : 'Mute All'}</span>
           </button>
 
           {/* Presence Status Selector */}
@@ -2417,7 +2494,14 @@ export default function App() {
                 Audio Channels & Occlusion
               </span>
               <div className="flex items-center gap-2">
-                {!isWindowFocused ? (
+                {isMasterMuted ? (
+                  <span
+                    className="text-[9px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 font-mono flex items-center gap-1 animate-pulse"
+                    title="Master Mute is ON: All incoming peer audio is muted"
+                  >
+                    <VolumeX className="h-3 w-3 text-rose-400" /> Master Muted
+                  </span>
+                ) : !isWindowFocused ? (
                   <span
                     className="text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono flex items-center gap-1"
                     title="Window unfocused: Spatial audio automatically silenced until user returns"
@@ -2515,6 +2599,7 @@ export default function App() {
                         onPlaybackVolumeChange={(vol) => handlePeerVolumeChange(peer.userId, vol)}
                         onToggleMute={() => handleTogglePeerMute(peer.userId)}
                         isWindowFocused={isWindowFocused}
+                        isMasterMuted={isMasterMuted}
                       />
                     );
                   })}
@@ -2760,6 +2845,30 @@ export default function App() {
                     <span className="h-1.5 w-5 bg-emerald-500 rounded shrink-0" />
                     <span className="text-slate-300 font-semibold">Solid Green Line:</span>
                     <span className="text-slate-400">Unobstructed line-of-sight for direct WebRTC & spatial audio.</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Master Mute & Volume Controls */}
+              <div>
+                <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                  4. Master Audio Controls
+                </h3>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2 text-[11px]">
+                  <div className="flex items-center gap-2">
+                    <VolumeX className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                    <span className="text-slate-200 font-semibold">Master &ldquo;Mute All&rdquo; Button:</span>
+                    <span className="text-slate-400">
+                      Instantly ramps gain of all peer audio nodes to 0 and persists this mute state for any newly joined peers or newly created connections.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Sliders className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                    <span className="text-slate-200 font-semibold">Per-Peer Volume &amp; Mute:</span>
+                    <span className="text-slate-400">
+                      Allows fine-grained volume adjustment (0%–150%) and individual mute toggling per channel.
+                    </span>
                   </div>
                 </div>
               </div>
