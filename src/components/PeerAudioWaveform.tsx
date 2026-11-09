@@ -27,6 +27,8 @@ interface WaveformDataPoint {
   value: number;
 }
 
+export type SpatialAudioProfile = 'mono' | 'stereo' | 'hrtf';
+
 export interface PeerAudioWaveformProps {
   peerId: string;
   displayName: string;
@@ -45,6 +47,7 @@ export interface PeerAudioWaveformProps {
   relativeX?: number; // pixel offset from local user
   isWindowFocused?: boolean;
   isMasterMuted?: boolean;
+  spatialProfile?: SpatialAudioProfile;
 }
 
 /**
@@ -70,6 +73,7 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
   relativeX,
   isWindowFocused = true,
   isMasterMuted = false,
+  spatialProfile = 'stereo',
 }) => {
   const [chartMode, setChartMode] = useState<'wave' | 'spectrum'>('wave');
   const [dataPoints, setDataPoints] = useState<WaveformDataPoint[]>(() =>
@@ -97,16 +101,20 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
     isMuted || (isMasterMuted && !isLocalUser) || (!isWindowFocused && !isLocalUser) ? 0 : playbackVolume / 100;
 
   // Calculate current stereo panning (-1.0 for Left to +1.0 for Right)
-  const currentPan =
+  // When in 'mono' mode, panning is forced to 0 (center)
+  const rawPan =
     pan !== undefined
       ? Math.max(-1, Math.min(1, pan))
       : relativeX !== undefined
       ? Math.max(-1, Math.min(1, relativeX / 150))
       : 0;
+  const currentPan = spatialProfile === 'mono' ? 0 : rawPan;
 
   // Human-readable pan label
   let panLabel = 'Center';
-  if (currentPan < -0.08) {
+  if (spatialProfile === 'mono') {
+    panLabel = 'Mono';
+  } else if (currentPan < -0.08) {
     panLabel = `${Math.round(Math.abs(currentPan) * 100)}% L`;
   } else if (currentPan > 0.08) {
     panLabel = `${Math.round(currentPan * 100)}% R`;
@@ -633,7 +641,13 @@ export const PeerAudioWaveform: React.FC<PeerAudioWaveformProps> = ({
             {/* Visual Stereo Panning Meter */}
             <div
               className="shrink-0 flex items-center gap-1.5 bg-slate-900/90 px-2 py-1 rounded-md border border-slate-800/90"
-              title={`Stereo Panning: ${panLabel} (horizontal offset: ${Math.round(relativeX ?? 0)}px)`}
+              title={`Spatial Audio Profile: ${
+                spatialProfile === 'hrtf'
+                  ? 'HRTF Binaural 3D'
+                  : spatialProfile === 'mono'
+                  ? 'Mono (No Panning)'
+                  : 'Stereo Panner'
+              } | Panning: ${panLabel} (horizontal offset: ${Math.round(relativeX ?? 0)}px)`}
             >
               <Headphones className="h-3 w-3 text-slate-400 shrink-0" />
 

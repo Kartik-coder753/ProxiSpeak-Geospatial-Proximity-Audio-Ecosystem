@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { PeerAudioWaveform } from './components/PeerAudioWaveform';
+import { PeerAudioWaveform, SpatialAudioProfile } from './components/PeerAudioWaveform';
 import { io as ClientSocket, Socket } from 'socket.io-client';
 import {
   ShieldCheck,
@@ -168,7 +168,8 @@ export default function App() {
       string,
       {
         osc: OscillatorNode;
-        panner: StereoPannerNode;
+        stereoPanner: StereoPannerNode;
+        panner3D: PannerNode;
         gain: GainNode;
         analyser: AnalyserNode;
       }
@@ -181,6 +182,8 @@ export default function App() {
   const peerMutedRef = useRef<Map<string, boolean>>(new Map());
   const [isMasterMuted, setIsMasterMuted] = useState<boolean>(false);
   const isMasterMutedRef = useRef<boolean>(false);
+  const [spatialProfile, setSpatialProfile] = useState<SpatialAudioProfile>('stereo');
+  const spatialProfileRef = useRef<SpatialAudioProfile>('stereo');
   const [isWindowFocused, setIsWindowFocused] = useState<boolean>(
     typeof document !== 'undefined' ? !document.hidden : true
   );
@@ -355,7 +358,7 @@ export default function App() {
 
   // Update spatial audio nodes for peers in earshot
   const updateSpatialAudio = useCallback(
-    (peerId: string, distance: number, occlusionTransmission: number, relativeX: number) => {
+    (peerId: string, distance: number, occlusionTransmission: number, relativeX: number, relativeY: number = 0) => {
       if (!spatialAudioEnabled) return;
       initSpatialAudioEngine();
       const ctx = audioCtxRef.current;
@@ -365,7 +368,15 @@ export default function App() {
       if (!nodes) {
         try {
           const osc = ctx.createOscillator();
-          const panner = ctx.createStereoPanner();
+          const stereoPanner = ctx.createStereoPanner();
+          const panner3D = ctx.createPanner();
+          panner3D.panningModel = 'HRTF';
+          panner3D.distanceModel = 'inverse';
+          panner3D.refDistance = 20;
+          panner3D.maxDistance = 150;
+          panner3D.rolloffFactor = 1;
+          panner3D.coneInnerAngle = 360;
+
           const gain = ctx.createGain();
 
           // Subtle melodic tone for each peer
@@ -379,13 +390,15 @@ export default function App() {
           analyser.fftSize = 64;
           analyser.smoothingTimeConstant = 0.7;
 
-          osc.connect(panner);
-          panner.connect(gain);
+          // Wire graph: osc -> stereoPanner -> panner3D -> gain -> analyser -> destination
+          osc.connect(stereoPanner);
+          stereoPanner.connect(panner3D);
+          panner3D.connect(gain);
           gain.connect(analyser);
           analyser.connect(ctx.destination);
           osc.start();
 
-          nodes = { osc, panner, gain, analyser };
+          nodes = { osc, stereoPanner, panner3D, gain, analyser };
           peerAudioNodesRef.current.set(peerId, nodes);
         } catch {
           return;
@@ -401,11 +414,48 @@ export default function App() {
       const distanceFactor = Math.max(0, 1 - distance / 110);
       const targetVolume =
         distanceFactor * occlusionTransmission * 0.12 * userVolSetting * masterMuteMultiplier * focusMultiplier;
-      const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
 
+      const profile = spatialProfileRef.current;
       const now = ctx.currentTime;
+
+      // Apply rendering profile
+      if (profile === 'mono') {
+        // Mono profile: Center stereo pan and neutral 3D position (no spatial offset)
+        nodes.stereoPanner.pan.setTargetAtTime(0, now, 0.08);
+        if (nodes.panner3D.positionX) {
+          nodes.panner3D.positionX.setTargetAtTime(0, now, 0.08);
+          nodes.panner3D.positionY.setTargetAtTime(0, now, 0.08);
+          nodes.panner3D.positionZ.setTargetAtTime(1, now, 0.08);
+        } else {
+          nodes.panner3D.setPosition(0, 0, 1);
+        }
+      } else if (profile === 'hrtf') {
+        // HRTF Binaural 3D profile: neutral stereo panner, position in 3D binaural space with head shadowing
+        nodes.stereoPanner.pan.setTargetAtTime(0, now, 0.08);
+        const normX = relativeX / 80;
+        const normY = relativeY / 80;
+        const normZ = 0.5; // Slight forward plane elevation
+        if (nodes.panner3D.positionX) {
+          nodes.panner3D.positionX.setTargetAtTime(normX, now, 0.08);
+          nodes.panner3D.positionY.setTargetAtTime(-normY, now, 0.08);
+          nodes.panner3D.positionZ.setTargetAtTime(normZ, now, 0.08);
+        } else {
+          nodes.panner3D.setPosition(normX, -normY, normZ);
+        }
+      } else {
+        // Stereo Panner profile (default): horizontal bidirectional stereo pan (-1.0 to +1.0)
+        const targetPan = Math.max(-1, Math.min(1, relativeX / 150));
+        nodes.stereoPanner.pan.setTargetAtTime(targetPan, now, 0.08);
+        if (nodes.panner3D.positionX) {
+          nodes.panner3D.positionX.setTargetAtTime(0, now, 0.08);
+          nodes.panner3D.positionY.setTargetAtTime(0, now, 0.08);
+          nodes.panner3D.positionZ.setTargetAtTime(1, now, 0.08);
+        } else {
+          nodes.panner3D.setPosition(0, 0, 1);
+        }
+      }
+
       nodes.gain.gain.setTargetAtTime(targetVolume, now, 0.08);
-      nodes.panner.pan.setTargetAtTime(targetPan, now, 0.08);
     },
     [spatialAudioEnabled, initSpatialAudioEngine]
   );
@@ -526,6 +576,56 @@ export default function App() {
       }
     },
     [activeUsers, currentOffice, myPosition]
+  );
+
+  // Switch between 'mono', 'stereo', and 'hrtf' spatial audio rendering profiles
+  const handleSpatialProfileChange = useCallback(
+    (newProfile: SpatialAudioProfile) => {
+      setSpatialProfile(newProfile);
+      spatialProfileRef.current = newProfile;
+      initSpatialAudioEngine();
+
+      const profileName =
+        newProfile === 'hrtf'
+          ? 'HRTF Binaural 3D'
+          : newProfile === 'mono'
+          ? 'Mono (No Panning)'
+          : 'Stereo Panner';
+      addLog('info', `Spatial Audio Profile switched to: ${profileName}`);
+
+      // Immediately re-render all active peer audio nodes with the new profile settings
+      if (audioCtxRef.current && currentOffice) {
+        const otherUsers = activeUsers.filter((u) => u.userId !== selectedUser?.user.id);
+        otherUsers.forEach((remoteUser) => {
+          const dist = Math.hypot(remoteUser.position.x - myPosition.x, remoteUser.position.y - myPosition.y);
+          const exitLimit = proximityConfig.exitRadius || 110;
+          if (dist <= exitLimit) {
+            const occlusion = clientGeometry.checkSoundObstruction(
+              { x: myPosition.x, y: myPosition.y },
+              { x: remoteUser.position.x, y: remoteUser.position.y },
+              currentOffice.obstacles
+            );
+            updateSpatialAudio(
+              remoteUser.userId,
+              dist,
+              occlusion.totalTransmission,
+              remoteUser.position.x - myPosition.x,
+              remoteUser.position.y - myPosition.y
+            );
+          }
+        });
+      }
+    },
+    [
+      initSpatialAudioEngine,
+      addLog,
+      currentOffice,
+      activeUsers,
+      selectedUser,
+      myPosition,
+      proximityConfig.exitRadius,
+      updateSpatialAudio,
+    ]
   );
 
   // Initialize synthetic or microphone audio track
@@ -685,12 +785,13 @@ export default function App() {
           currentOffice.obstacles
         );
 
-        // Update permanent audio with continuous distance attenuation & occlusion
+        // Update permanent audio with continuous distance attenuation, occlusion, and 2D relative offsets
         updateSpatialAudio(
           remoteUser.userId,
           dist,
           occlusion.totalTransmission,
-          remoteUser.position.x - myPosition.x
+          remoteUser.position.x - myPosition.x,
+          remoteUser.position.y - myPosition.y
         );
       }
     });
@@ -717,6 +818,7 @@ export default function App() {
     initSpatialAudioEngine,
     isWindowFocused,
     isMasterMuted,
+    spatialProfile,
   ]);
 
   // Keep-Alive Heartbeat: Pings backend every 3 seconds so user presence & sound never expire
@@ -1646,18 +1748,37 @@ export default function App() {
 
         {/* Server Status & Controls */}
         <div className="flex items-center gap-2.5 text-xs">
-          <button
-            onClick={() => setSpatialAudioEnabled(!spatialAudioEnabled)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium transition ${
-              spatialAudioEnabled
-                ? 'bg-purple-600/20 border-purple-500/40 text-purple-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400'
-            }`}
-            title="Toggle Web Audio spatial synthesizer tone simulation"
-          >
-            <Headphones className="h-3.5 w-3.5" />
-            <span>Spatial Audio {spatialAudioEnabled ? 'ON' : 'OFF'}</span>
-          </button>
+          <div className="flex items-center gap-1.5 bg-slate-800/80 p-1 rounded-lg border border-slate-700">
+            <button
+              onClick={() => setSpatialAudioEnabled(!spatialAudioEnabled)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                spatialAudioEnabled
+                  ? 'bg-purple-600/30 text-purple-200 border border-purple-500/40'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Toggle Web Audio spatial synthesizer tone simulation"
+            >
+              <Headphones className="h-3.5 w-3.5" />
+              <span>Spatial Audio {spatialAudioEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+
+            {/* Spatial Audio Rendering Profile Dropdown */}
+            <div className="flex items-center gap-1 pl-1 border-l border-slate-700/80">
+              <Compass className="h-3.5 w-3.5 text-indigo-400 shrink-0 hidden sm:inline" />
+              <select
+                value={spatialProfile}
+                onChange={(e) => handleSpatialProfileChange(e.target.value as SpatialAudioProfile)}
+                disabled={!spatialAudioEnabled}
+                aria-label="Spatial Audio Rendering Profile"
+                className="bg-slate-900 border border-slate-700 rounded text-slate-200 text-xs px-2 py-1 focus:outline-none focus:border-indigo-500 font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition"
+                title="Switch spatial audio rendering profile: Mono, Stereo Panner, or HRTF Binaural 3D"
+              >
+                <option value="stereo">Stereo Panner</option>
+                <option value="hrtf">HRTF Binaural</option>
+                <option value="mono">Mono</option>
+              </select>
+            </div>
+          </div>
 
           <button
             onClick={toggleMicrophone}
@@ -2522,6 +2643,24 @@ export default function App() {
               </div>
             </h3>
 
+            {/* Spatial Audio Settings & Profile Selector */}
+            <div className="mb-3 p-2 rounded-lg bg-slate-950/70 border border-slate-800 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-slate-300 font-medium">
+                <Sliders className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Spatial Profile:</span>
+              </div>
+              <select
+                value={spatialProfile}
+                onChange={(e) => handleSpatialProfileChange(e.target.value as SpatialAudioProfile)}
+                aria-label="Audio Settings Spatial Rendering Profile"
+                className="bg-slate-900 border border-slate-700 rounded-md text-slate-200 text-xs px-2.5 py-1 focus:outline-none focus:border-indigo-500 font-medium cursor-pointer transition"
+              >
+                <option value="stereo">Stereo Panner (2D)</option>
+                <option value="hrtf">HRTF Binaural (3D)</option>
+                <option value="mono">Mono (Centered)</option>
+              </select>
+            </div>
+
             {/* Real-Time Waveform Visualizations using Web Audio API & Recharts */}
             <div className="space-y-3">
               {/* Local Microphone Waveform (if enabled) */}
@@ -2600,6 +2739,7 @@ export default function App() {
                         onToggleMute={() => handleTogglePeerMute(peer.userId)}
                         isWindowFocused={isWindowFocused}
                         isMasterMuted={isMasterMuted}
+                        spatialProfile={spatialProfile}
                       />
                     );
                   })}
@@ -2869,6 +3009,48 @@ export default function App() {
                     <span className="text-slate-400">
                       Allows fine-grained volume adjustment (0%–150%) and individual mute toggling per channel.
                     </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. Spatial Audio Rendering Profiles */}
+              <div>
+                <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-indigo-400" />
+                  5. Spatial Audio Rendering Profiles
+                </h3>
+                <p className="text-slate-400 mb-3 text-[11px] leading-relaxed">
+                  Choose how peer audio is rendered in your headphones or speakers using the dropdown in the header or audio settings:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-200">Mono</span>
+                      <span className="text-[10px] text-slate-500 font-mono">Centered</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      Equal intensity in both channels with zero horizontal panning. Ideal for single-earpiece setups or mono headsets.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-indigo-300">Stereo Panner</span>
+                      <span className="text-[10px] text-indigo-400/80 font-mono">2D L/R</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      Bidirectional stereo panning based on horizontal displacement (-1.0 Left to +1.0 Right) using StereoPannerNode.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-emerald-300">HRTF Binaural</span>
+                      <span className="text-[10px] text-emerald-400/80 font-mono">3D Spatial</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-normal">
+                      Head-Related Transfer Function simulating acoustic head-shadowing and 3D positioning via Web Audio PannerNode.
+                    </p>
                   </div>
                 </div>
               </div>
