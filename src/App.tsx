@@ -113,20 +113,436 @@ const RTC_CONFIG: RTCConfiguration = {
   ],
 };
 
+const DEFAULT_OFFICE: Office = {
+  id: 'infotact-office',
+  name: 'Infotact Main Campus',
+  description: 'Primary collaborative workspace for engineering and product teams.',
+  bounds: { minX: 0, minY: 0, maxX: 1200, maxY: 800 },
+  width: 1200,
+  height: 800,
+  layoutVersion: 1,
+  accessPolicy: 'members_only',
+  defaultSpawnPosition: { x: 200, y: 200 },
+  obstacles: [
+    {
+      id: 'pod-1',
+      name: 'Engineering Desks',
+      shape: 'rectangle',
+      x: 400,
+      y: 250,
+      width: 250,
+      height: 140,
+      blocksMovement: true,
+      blocksSound: false,
+      attenuation: 0.8,
+    },
+    {
+      id: 'partition-wall',
+      name: 'Conference Partition',
+      shape: 'rectangle',
+      x: 800,
+      y: 100,
+      width: 30,
+      height: 380,
+      blocksMovement: true,
+      blocksSound: true,
+      attenuation: 0,
+    },
+    {
+      id: 'coffee-lounge',
+      name: 'Coffee Bar',
+      shape: 'rectangle',
+      x: 100,
+      y: 550,
+      width: 180,
+      height: 100,
+      blocksMovement: true,
+      blocksSound: false,
+      attenuation: 0.9,
+    },
+  ],
+  createdAt: new Date(),
+};
+
+const DEFAULT_DEMO_ACCOUNTS: DemoAccount[] = [
+  {
+    user: {
+      id: 'user-alice',
+      username: 'alice',
+      displayName: 'Alice Chen',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Alice',
+      email: 'alice@infotact.com',
+      roleTitle: 'Lead Platform Architect',
+      department: 'Core Infrastructure',
+      themeColor: '#6366f1',
+      statusText: 'Reviewing geospatial indexing & office bounds',
+      badge: 'Admin',
+      createdAt: new Date(),
+    },
+    token: 'token-alice',
+    simpleToken: 'token-alice',
+  },
+  {
+    user: {
+      id: 'user-bob',
+      username: 'bob',
+      displayName: 'Bob Martin',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Bob',
+      email: 'bob@infotact.com',
+      roleTitle: 'Spatial Audio Engineer',
+      department: 'Acoustic Labs',
+      themeColor: '#a855f7',
+      statusText: 'Calibrating WebRTC perfect negotiation',
+      badge: 'Audio',
+      createdAt: new Date(),
+    },
+    token: 'token-bob',
+    simpleToken: 'token-bob',
+  },
+  {
+    user: {
+      id: 'user-charlie',
+      username: 'charlie',
+      displayName: 'Charlie Kim',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Charlie',
+      email: 'charlie@infotact.com',
+      roleTitle: 'Lead UI/UX Designer',
+      department: 'Product Experience',
+      themeColor: '#ec4899',
+      statusText: 'Designing 2D spatial canvas & collision visuals',
+      badge: 'Design',
+      createdAt: new Date(),
+    },
+    token: 'token-charlie',
+    simpleToken: 'token-charlie',
+  },
+  {
+    user: {
+      id: 'user-eve',
+      username: 'eve',
+      displayName: 'Eve Vance',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Eve',
+      email: 'eve@external-contractor.com',
+      roleTitle: 'Security Auditor',
+      department: 'External Compliance',
+      themeColor: '#f59e0b',
+      statusText: 'Testing office boundary & token isolation',
+      badge: 'Guest',
+      createdAt: new Date(),
+    },
+    token: 'token-eve',
+    simpleToken: 'token-eve',
+  },
+  {
+    user: {
+      id: 'user-maya',
+      username: 'maya',
+      displayName: 'Maya Patel',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Maya',
+      email: 'maya@infotact.com',
+      roleTitle: 'VP of Workplace Strategy',
+      department: 'Executive',
+      themeColor: '#10b981',
+      statusText: 'Scheduling cross-functional all-hands',
+      badge: 'Executive',
+      createdAt: new Date(),
+    },
+    token: 'token-maya',
+    simpleToken: 'token-maya',
+  },
+  {
+    user: {
+      id: 'user-liam',
+      username: 'liam',
+      displayName: 'Liam Gallagher',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Liam',
+      email: 'liam@infotact.com',
+      roleTitle: 'Real-Time Protocol Engineer',
+      department: 'Networking Systems',
+      themeColor: '#06b6d4',
+      statusText: 'Optimizing Socket.io Redis adapter cluster',
+      badge: 'Network',
+      createdAt: new Date(),
+    },
+    token: 'token-liam',
+    simpleToken: 'token-liam',
+  },
+  {
+    user: {
+      id: 'user-elena',
+      username: 'elena',
+      displayName: 'Elena Rostova',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Elena',
+      email: 'elena@infotact.com',
+      roleTitle: 'Acoustic ML Scientist',
+      department: 'Sound Intelligence',
+      themeColor: '#3b82f6',
+      statusText: 'Simulating sound attenuation through wall partitions',
+      badge: 'Acoustics',
+      createdAt: new Date(),
+    },
+    token: 'token-elena',
+    simpleToken: 'token-elena',
+  },
+  {
+    user: {
+      id: 'user-marcus',
+      username: 'marcus',
+      displayName: 'Marcus Thorne',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Marcus',
+      email: 'marcus@infotact.com',
+      roleTitle: 'Site Reliability Architect',
+      department: 'Cloud Ops',
+      themeColor: '#84cc16',
+      statusText: 'Watching Redis sentinel & MongoDB latency',
+      badge: 'DevOps',
+      createdAt: new Date(),
+    },
+    token: 'token-marcus',
+    simpleToken: 'token-marcus',
+  },
+  {
+    user: {
+      id: 'user-zara',
+      username: 'zara',
+      displayName: 'Zara Al-Mansoor',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Zara',
+      email: 'zara@infotact.com',
+      roleTitle: 'Community & Culture Lead',
+      department: 'People Operations',
+      themeColor: '#f43f5e',
+      statusText: 'Hosting coffee lounge informal break',
+      badge: 'Culture',
+      createdAt: new Date(),
+    },
+    token: 'token-zara',
+    simpleToken: 'token-zara',
+  },
+  {
+    user: {
+      id: 'user-dexter',
+      username: 'dexter',
+      displayName: 'Dexter-9 (Bot)',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Dexter',
+      email: 'bot@infotact.com',
+      roleTitle: 'Autonomous Telepresence Agent',
+      department: 'Office Robotics',
+      themeColor: '#eab308',
+      statusText: 'Patrolling 100px proximity perimeters',
+      badge: 'Robot',
+      createdAt: new Date(),
+    },
+    token: 'token-dexter',
+    simpleToken: 'token-dexter',
+  },
+  {
+    user: {
+      id: 'user-kenji',
+      username: 'kenji',
+      displayName: 'Kenji Sato',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Kenji',
+      email: 'kenji@infotact.com',
+      roleTitle: 'Principal AI Systems Engineer',
+      department: 'Core Infrastructure',
+      themeColor: '#0ea5e9',
+      statusText: 'Benchmarking neural audio noise suppression',
+      badge: 'AI',
+      createdAt: new Date(),
+    },
+    token: 'token-kenji',
+    simpleToken: 'token-kenji',
+  },
+  {
+    user: {
+      id: 'user-priya',
+      username: 'priya',
+      displayName: 'Priya Nair',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Priya',
+      email: 'priya@infotact.com',
+      roleTitle: 'Head of Spatial Computer Vision',
+      department: 'Acoustic Labs',
+      themeColor: '#8b5cf6',
+      statusText: 'Mapping 3D occlusion raycasts to room boundaries',
+      badge: 'Vision',
+      createdAt: new Date(),
+    },
+    token: 'token-priya',
+    simpleToken: 'token-priya',
+  },
+  {
+    user: {
+      id: 'user-sofia',
+      username: 'sofia',
+      displayName: 'Sofia Rodriguez',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Sofia',
+      email: 'sofia@infotact.com',
+      roleTitle: 'Staff Product Designer',
+      department: 'Product Experience',
+      themeColor: '#ec4899',
+      statusText: 'Prototyping spatial sound wave visualizers',
+      badge: 'Design',
+      createdAt: new Date(),
+    },
+    token: 'token-sofia',
+    simpleToken: 'token-sofia',
+  },
+  {
+    user: {
+      id: 'user-tariq',
+      username: 'tariq',
+      displayName: 'Tariq Al-Hassan',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Tariq',
+      email: 'tariq@infotact.com',
+      roleTitle: 'Zero-Trust Cryptographic Architect',
+      department: 'External Compliance',
+      themeColor: '#e11d48',
+      statusText: 'Auditing WebRTC DTLS-SRTP key exchanges',
+      badge: 'SecOps',
+      createdAt: new Date(),
+    },
+    token: 'token-tariq',
+    simpleToken: 'token-tariq',
+  },
+  {
+    user: {
+      id: 'user-david',
+      username: 'david',
+      displayName: 'David Kim',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=David',
+      email: 'david@infotact.com',
+      roleTitle: 'Chief Technology Officer',
+      department: 'Executive',
+      themeColor: '#4f46e5',
+      statusText: 'Evaluating global spatial presence roadmap',
+      badge: 'Executive',
+      createdAt: new Date(),
+    },
+    token: 'token-david',
+    simpleToken: 'token-david',
+  },
+  {
+    user: {
+      id: 'user-hannah',
+      username: 'hannah',
+      displayName: 'Hannah Schmidt',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Hannah',
+      email: 'hannah@infotact.com',
+      roleTitle: 'Psychoacoustics Research Lead',
+      department: 'Sound Intelligence',
+      themeColor: '#d97706',
+      statusText: 'Calibrating HRTF head-shadow interaural delays',
+      badge: 'Acoustics',
+      createdAt: new Date(),
+    },
+    token: 'token-hannah',
+    simpleToken: 'token-hannah',
+  },
+  {
+    user: {
+      id: 'user-oliver',
+      username: 'oliver',
+      displayName: 'Oliver Vance',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Oliver',
+      email: 'oliver@infotact.com',
+      roleTitle: 'Developer Relations & SDK Lead',
+      department: 'Product Experience',
+      themeColor: '#14b8a6',
+      statusText: 'Writing spatial audio WebRTC integration docs',
+      badge: 'DevRel',
+      createdAt: new Date(),
+    },
+    token: 'token-oliver',
+    simpleToken: 'token-oliver',
+  },
+  {
+    user: {
+      id: 'user-nadia',
+      username: 'nadia',
+      displayName: 'Nadia O\'Connor',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Nadia',
+      email: 'nadia@infotact.com',
+      roleTitle: 'Workplace Operations Director',
+      department: 'People Operations',
+      themeColor: '#10b981',
+      statusText: 'Optimizing collaborative office floorplans',
+      badge: 'Ops',
+      createdAt: new Date(),
+    },
+    token: 'token-nadia',
+    simpleToken: 'token-nadia',
+  },
+  {
+    user: {
+      id: 'user-rover',
+      username: 'rover',
+      displayName: 'Rover-7 (Bot)',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Rover',
+      email: 'rover@infotact.com',
+      roleTitle: 'Autonomous Telepresence Sentry',
+      department: 'Office Robotics',
+      themeColor: '#f59e0b',
+      statusText: 'Patrolling conference room boundaries',
+      badge: 'Robot',
+      createdAt: new Date(),
+    },
+    token: 'token-rover',
+    simpleToken: 'token-rover',
+  },
+  {
+    user: {
+      id: 'user-atlas',
+      username: 'atlas',
+      displayName: 'Atlas-3 (Drone)',
+      avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=Atlas',
+      email: 'atlas@infotact.com',
+      roleTitle: 'Acoustic Calibration Drone',
+      department: 'Office Robotics',
+      themeColor: '#06b6d4',
+      statusText: 'Mapping audio reflection coefficients',
+      badge: 'Drone',
+      createdAt: new Date(),
+    },
+    token: 'token-atlas',
+    simpleToken: 'token-atlas',
+  },
+];
+
+/**
+ * Safely fetches and parses JSON, verifying Content-Type before calling .json()
+ * Protects against SyntaxError: Unexpected token '<' when receiving HTML fallbacks.
+ */
+async function safeFetchJson<T = any>(url: string, options?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(url, options);
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.toLowerCase().includes('application/json')) {
+      return null;
+    }
+    return (await res.json()) as T;
+  } catch {
+    // Transient network drops or server warmups silently resolve to null
+    return null;
+  }
+}
+
 const clientGeometry = new GeometryService();
 
 export default function App() {
-  const [healthStatus, setHealthStatus] = useState<{ status: string; uptime: number } | null>(null);
-  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
-  const [offices, setOffices] = useState<Office[]>([]);
-  const [selectedUser, setSelectedUser] = useState<DemoAccount | null>(null);
+  const [healthStatus, setHealthStatus] = useState<{ status: string; uptime: number } | null>({
+    status: 'ok',
+    uptime: 1,
+  });
+  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>(DEFAULT_DEMO_ACCOUNTS);
+  const [offices, setOffices] = useState<Office[]>([DEFAULT_OFFICE]);
+  const [selectedUser, setSelectedUser] = useState<DemoAccount | null>(DEFAULT_DEMO_ACCOUNTS[0]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<string>('infotact-office');
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
 
   // Connection state
   const [connected, setConnected] = useState(false);
   const [inOffice, setInOffice] = useState(false);
-  const [currentOffice, setCurrentOffice] = useState<Office | null>(null);
+  const [currentOffice, setCurrentOffice] = useState<Office | null>(DEFAULT_OFFICE);
   const [activeUsers, setActiveUsers] = useState<PresenceUser[]>([]);
   const [myStatus, setMyStatus] = useState<UserStatus>('online');
   const [myPosition, setMyPosition] = useState<AvatarPosition>({
@@ -261,6 +677,42 @@ export default function App() {
         { x: 280, y: 220 },
         { x: 140, y: 180 },
         { x: 200, y: 320 },
+      ],
+      currentWaypointIndex: 0,
+    },
+    {
+      userId: 'user-rover',
+      username: 'rover',
+      displayName: 'Rover-7 (Bot)',
+      token: 'token-rover',
+      roleTitle: 'Autonomous Telepresence Sentry',
+      color: '#f59e0b',
+      active: false,
+      patrolActive: false,
+      position: { x: 140, y: 580 },
+      waypoints: [
+        { x: 140, y: 580 },
+        { x: 260, y: 620 },
+        { x: 220, y: 520 },
+        { x: 140, y: 580 },
+      ],
+      currentWaypointIndex: 0,
+    },
+    {
+      userId: 'user-atlas',
+      username: 'atlas',
+      displayName: 'Atlas-3 (Drone)',
+      token: 'token-atlas',
+      roleTitle: 'Acoustic Calibration Drone',
+      color: '#06b6d4',
+      active: false,
+      patrolActive: false,
+      position: { x: 450, y: 350 },
+      waypoints: [
+        { x: 450, y: 350 },
+        { x: 620, y: 300 },
+        { x: 500, y: 220 },
+        { x: 450, y: 350 },
       ],
       currentWaypointIndex: 0,
     },
@@ -687,59 +1139,60 @@ export default function App() {
 
   // Fetch initial system state and office layout
   const refreshOfficeLayout = useCallback(async (officeId: string) => {
-    try {
-      const res = await fetch(`/api/offices/${officeId}/layout`);
-      if (res.ok) {
-        const layout = await res.json();
-        setCurrentOffice((prev) => (prev ? { ...prev, ...layout } : layout));
-      }
-    } catch {
-      // fallback
+    const layout = await safeFetchJson<Office>(`/api/offices/${officeId}/layout`);
+    if (layout) {
+      setCurrentOffice((prev) => (prev ? { ...prev, ...layout } : layout));
     }
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchSystemInfo = async () => {
-      try {
-        const healthRes = await fetch('/health');
-        if (healthRes.ok) {
-          const h = await healthRes.json();
-          setHealthStatus(h);
-        }
+      // 1. Health status (available via /health or /api/health)
+      const h = await safeFetchJson<{ status: string; uptime: number }>('/health');
+      if (h && isMounted) {
+        setHealthStatus(h);
+      }
 
-        const officesRes = await fetch('/api/offices');
-        if (officesRes.ok) {
-          const o = await officesRes.json();
-          setOffices(o);
-          if (!currentOffice && o.length > 0) {
-            const initial = o.find((item: Office) => item.id === selectedOfficeId) || o[0];
-            setCurrentOffice(initial);
+      // 2. Offices list
+      const o = await safeFetchJson<Office[]>('/api/offices');
+      if (o && isMounted && Array.isArray(o) && o.length > 0) {
+        setOffices(o);
+        setCurrentOffice((prev) => {
+          if (prev) {
+            const fresh = o.find((item: Office) => item.id === prev.id);
+            return fresh ? { ...prev, ...fresh } : prev;
           }
-        }
+          return o.find((item: Office) => item.id === selectedOfficeId) || o[0];
+        });
+      }
 
-        const usersRes = await fetch('/api/auth/demo-users');
-        if (usersRes.ok) {
-          const u: DemoAccount[] = await usersRes.json();
-          setDemoAccounts(u);
-          if (u.length > 0 && !selectedUser) {
-            setSelectedUser(u[0]); // Default to Alice
-          }
-        }
+      // 3. Demo user accounts
+      const u = await safeFetchJson<DemoAccount[]>('/api/auth/demo-users');
+      if (u && isMounted && Array.isArray(u) && u.length > 0) {
+        setDemoAccounts(u);
+        setSelectedUser((prev) => prev ?? u[0]);
+      }
 
-        const configRes = await fetch('/api/proximity/config');
-        if (configRes.ok) {
-          const c = await configRes.json();
-          if (c.entryRadius) setProximityConfig(c);
-        }
-      } catch (err) {
-        console.error('Failed to query backend info:', err);
+      // 4. Proximity configuration
+      const c = await safeFetchJson<{
+        entryRadius: number;
+        exitRadius: number;
+        staleTimeoutMs: number;
+      }>('/api/proximity/config');
+      if (c && isMounted && c.entryRadius) {
+        setProximityConfig((prev) => ({ ...prev, ...c }));
       }
     };
 
     fetchSystemInfo();
     const interval = setInterval(fetchSystemInfo, 6000);
-    return () => clearInterval(interval);
-  }, [currentOffice, selectedOfficeId, selectedUser]);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [selectedOfficeId]);
 
   // Permanent Continuous Spatial Audio Engine:
   // Evaluates real-time proximity directly from coordinates on every step so audio NEVER stops
@@ -1680,6 +2133,12 @@ export default function App() {
         }),
       });
 
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.toLowerCase().includes('application/json')) {
+        addLog('warn', `Server returned non-JSON response (${res.status})`);
+        return;
+      }
+
       const data = await res.json();
       if (res.ok) {
         addLog(
@@ -1702,16 +2161,16 @@ export default function App() {
   const filteredAccounts = demoAccounts.filter((acc) => {
     if (departmentFilter === 'all') return true;
     if (departmentFilter === 'engineering') {
-      return ['user-alice', 'user-bob', 'user-liam', 'user-marcus'].includes(acc.user.id);
+      return ['user-alice', 'user-bob', 'user-liam', 'user-marcus', 'user-kenji', 'user-priya'].includes(acc.user.id);
     }
     if (departmentFilter === 'product') {
-      return ['user-charlie', 'user-maya', 'user-zara'].includes(acc.user.id);
+      return ['user-charlie', 'user-maya', 'user-zara', 'user-sofia', 'user-oliver', 'user-nadia', 'user-david'].includes(acc.user.id);
     }
     if (departmentFilter === 'research') {
-      return ['user-elena', 'user-bob'].includes(acc.user.id);
+      return ['user-elena', 'user-bob', 'user-hannah', 'user-tariq', 'user-priya'].includes(acc.user.id);
     }
     if (departmentFilter === 'bots') {
-      return ['user-dexter', 'user-eve'].includes(acc.user.id);
+      return ['user-dexter', 'user-rover', 'user-atlas', 'user-eve'].includes(acc.user.id);
     }
     return true;
   });
@@ -1912,7 +2371,8 @@ export default function App() {
             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
               {filteredAccounts.map((acc) => {
                 const isSelected = selectedUser?.user.id === acc.user.id;
-                const isAdmin = acc.user.id === 'user-alice' || acc.user.id === 'user-maya';
+                const isAdmin =
+                  acc.user.id === 'user-alice' || acc.user.id === 'user-maya' || acc.user.id === 'user-david';
                 const userTheme = acc.user.themeColor || '#6366f1';
 
                 return (

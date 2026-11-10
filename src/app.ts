@@ -32,8 +32,9 @@ export function createApp(deps?: AppDependencies): Express {
     })
   );
 
-  // Health check endpoint
-  app.get('/health', (_req: Request, res: Response) => {
+  // Health check endpoint (available at both /health and /api/health)
+  const healthHandler = (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       status: 'ok',
       service: 'ProxiSpeak Foundation',
@@ -41,7 +42,9 @@ export function createApp(deps?: AppDependencies): Express {
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     });
-  });
+  };
+  app.get('/health', healthHandler);
+  app.get('/api/health', healthHandler);
 
   // REST endpoints for inspection, diagnostics and UI client
   app.get('/api/offices', async (_req: Request, res: Response) => {
@@ -181,6 +184,11 @@ export function createApp(deps?: AppDependencies): Express {
     }));
 
     res.json(demoAccounts);
+  });
+
+  // Catch-all 404 handler for API routes to prevent falling through to Vite SPA html
+  app.all('/api/*', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'API endpoint not found', code: 'NOT_FOUND' });
   });
 
   return app;
