@@ -46,6 +46,7 @@ export interface Office {
   id: string;
   name: string;
   description?: string;
+  capacity?: number;
   bounds: OfficeBounds;
   width?: number;
   height?: number;

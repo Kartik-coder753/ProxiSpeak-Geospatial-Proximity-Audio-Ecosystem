@@ -43,6 +43,7 @@ import {
   Gauge,
   HelpCircle,
   X,
+  Search,
 } from 'lucide-react';
 import { Office, Obstacle, SoundOcclusionResult } from './shared/contracts/office.types';
 import {
@@ -117,6 +118,7 @@ const DEFAULT_OFFICE: Office = {
   id: 'infotact-office',
   name: 'Infotact Main Campus',
   description: 'Primary collaborative workspace for engineering and product teams.',
+  capacity: 45,
   bounds: { minX: 0, minY: 0, maxX: 1200, maxY: 800 },
   width: 1200,
   height: 800,
@@ -538,6 +540,7 @@ export default function App() {
   const [selectedUser, setSelectedUser] = useState<DemoAccount | null>(DEFAULT_DEMO_ACCOUNTS[0]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<string>('infotact-office');
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
+  const [officeSearchQuery, setOfficeSearchQuery] = useState<string>('');
 
   // Connection state
   const [connected, setConnected] = useState(false);
@@ -2175,6 +2178,26 @@ export default function App() {
     return true;
   });
 
+  // Filter offices by name, description, capacity, or access policy
+  const filteredOffices = offices.filter((off) => {
+    if (!officeSearchQuery.trim()) return true;
+    const q = officeSearchQuery.toLowerCase().trim();
+    const nameMatch = off.name.toLowerCase().includes(q);
+    const descMatch = (off.description || '').toLowerCase().includes(q);
+    const capStr = off.capacity !== undefined ? String(off.capacity) : '';
+    const capMatch =
+      capStr.includes(q) ||
+      `${capStr} seats`.includes(q) ||
+      `${capStr} capacity`.includes(q) ||
+      `cap: ${capStr}`.includes(q);
+    const accessMatch =
+      off.accessPolicy.toLowerCase().includes(q) ||
+      (off.accessPolicy === 'members_only' && 'restricted'.includes(q)) ||
+      (off.accessPolicy === 'public' && 'public'.includes(q));
+
+    return nameMatch || descMatch || capMatch || accessMatch;
+  });
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none">
       {/* Top Header Navigation */}
@@ -2468,49 +2491,95 @@ export default function App() {
 
             {/* 2. Office Selection & Persisted Layouts */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
-            <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2.5 flex items-center gap-2">
-              <Building className="h-4 w-4 text-amber-400" />
-              2. Persisted Virtual Offices
-            </h2>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <Building className="h-4 w-4 text-amber-400" />
+                2. Persisted Virtual Offices
+              </h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 font-mono">
+                {filteredOffices.length}{filteredOffices.length !== offices.length ? ` / ${offices.length}` : ''} Available
+              </span>
+            </div>
 
-            <div className="space-y-2 mb-3">
-              {offices.map((off) => {
-                const isSelected = selectedOfficeId === off.id;
-                const isRestricted = off.accessPolicy === 'members_only';
+            {/* Office Search Input Bar */}
+            <div className="relative mb-3">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={officeSearchQuery}
+                onChange={(e) => setOfficeSearchQuery(e.target.value)}
+                placeholder="Search by name, description, capacity..."
+                className="w-full bg-slate-950/70 border border-slate-700/80 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500/70 focus:ring-1 focus:ring-amber-500/40 transition"
+              />
+              {officeSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setOfficeSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 rounded transition"
+                  title="Clear search"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
 
-                return (
-                  <div
-                    key={off.id}
-                    onClick={() => {
-                      setSelectedOfficeId(off.id);
-                      refreshOfficeLayout(off.id);
-                    }}
-                    className={`p-2.5 rounded-lg border cursor-pointer transition ${
-                      isSelected
-                        ? 'border-amber-500/60 bg-amber-500/10 text-white'
-                        : 'border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-700'
-                    }`}
+            <div className="space-y-2 mb-3 max-h-64 overflow-y-auto pr-1">
+              {filteredOffices.length === 0 ? (
+                <div className="p-3.5 rounded-lg bg-slate-950/50 border border-dashed border-slate-800 text-center text-xs text-slate-400 space-y-1">
+                  <p>No offices match &ldquo;{officeSearchQuery}&rdquo;</p>
+                  <button
+                    type="button"
+                    onClick={() => setOfficeSearchQuery('')}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 underline font-medium"
                   >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-xs text-slate-200">{off.name}</span>
-                      {isRestricted ? (
-                        <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                          <Lock className="h-2.5 w-2.5" /> Restricted
-                        </span>
-                      ) : (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          Public
-                        </span>
-                      )}
+                    Clear search filter
+                  </button>
+                </div>
+              ) : (
+                filteredOffices.map((off) => {
+                  const isSelected = selectedOfficeId === off.id;
+                  const isRestricted = off.accessPolicy === 'members_only';
+
+                  return (
+                    <div
+                      key={off.id}
+                      onClick={() => {
+                        setSelectedOfficeId(off.id);
+                        refreshOfficeLayout(off.id);
+                      }}
+                      className={`p-2.5 rounded-lg border cursor-pointer transition ${
+                        isSelected
+                          ? 'border-amber-500/60 bg-amber-500/10 text-white'
+                          : 'border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-xs text-slate-200">{off.name}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-amber-300/90 border border-slate-700 font-mono">
+                            <Users className="h-2.5 w-2.5 text-amber-400" />
+                            <span>Cap: {off.capacity ? `${off.capacity}` : '45'}</span>
+                          </span>
+                          {isRestricted ? (
+                            <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">
+                              <Lock className="h-2.5 w-2.5" /> Restricted
+                            </span>
+                          ) : (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                              Public
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-400 line-clamp-1">{off.description}</div>
+                      <div className="text-[9px] text-slate-500 mt-1 font-mono flex justify-between">
+                        <span>Dimensions: {off.bounds?.maxX || off.width}x{off.bounds?.maxY || off.height}px</span>
+                        <span className="text-amber-400">Version: #{off.layoutVersion || 1}</span>
+                      </div>
                     </div>
-                    <div className="text-[10px] text-slate-400 line-clamp-1">{off.description}</div>
-                    <div className="text-[9px] text-slate-500 mt-1 font-mono flex justify-between">
-                      <span>Dimensions: {off.bounds?.maxX || off.width}x{off.bounds?.maxY || off.height}px</span>
-                      <span className="text-amber-400">Version: #{off.layoutVersion || 1}</span>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
 
             {inOffice ? (
